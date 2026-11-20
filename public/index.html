@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Upcoming events in our community.">
+  <title>Community calendar</title>
+  <style>
+    :root { color-scheme:light; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#101729; background:#fff; }
+    body { margin:0; }
+    header { background:#101729; color:#fff; padding:3rem max(1rem,calc((100vw - 1120px) / 2)); }
+    header p { margin:.5rem 0 0; color:#dce7ef; max-width:45rem; }
+    h1 { font-size:clamp(2rem,5vw,3rem); line-height:1.2; margin:0; }
+    main { max-width:1152px; margin:2rem auto; padding:0 1rem; }
+    church-calendar { --calendar-accent:#285f82; --calendar-surface:#f4f6f9; --calendar-text:#101729; --calendar-border-radius:6px; }
+    footer { max-width:1120px; margin:3rem auto; padding:1rem; border-top:1px solid #dce1e7; color:#545e6c; font-size:.875rem; }
+    footer a { color:#285f82; }
+  </style>
+  <script type="module" src="/embed.js"></script>
+</head>
+<body>
+  <header><h1>What’s coming up</h1><p>Find your next gathering, share a meal, or discover something new.</p></header>
+  <main><church-calendar></church-calendar><noscript>Please enable JavaScript to view the calendar.</noscript></main>
+  <footer>Event information is managed in Planning Center. <a href="https://github.com/goodgriefgnome/cloudflare-planning-center-calendar">About this calendar</a></footer>
+</body>
+</html>

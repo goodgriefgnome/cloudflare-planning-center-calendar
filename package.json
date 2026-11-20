@@ -1,0 +1,19 @@
+{
+  "name": "cloudflare-planning-center-calendar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A themeable Planning Center Calendar web component backed by Cloudflare Workers",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "demo": "node scripts/dev.mjs --var DEMO_MODE:true",
+    "test": "node --test",
+    "check": "node scripts/check.mjs",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": { "entities": "^9.0.0" },
+  "devDependencies": { "wrangler": "^4.166.0" }
+}

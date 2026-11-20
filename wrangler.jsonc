@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "planning-center-calendar",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // Replace the ID after running: npx wrangler kv namespace create CALENDAR
+  "kv_namespaces": [{ "binding": "CALENDAR", "id": "00000000000000000000000000000000" }],
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "vars": {
+    "TIMEZONE": "Australia/Sydney",
+    "ALLOWED_ORIGINS": "https://www.stjohnsanglican.org.au,https://stjohnsanglican.org.au",
+    "FALLBACK_URL": "https://stjohnsdarlinghurst.churchcenter.com/calendar?view=list",
+    "PCO_API_VERSION": "2026-06-22",
+    "PCO_USER_AGENT": "Planning Center Calendar Embed (https://github.com/goodgriefgnome/cloudflare-planning-center-calendar)",
+    "MAX_SNAPSHOT_AGE_SECONDS": "2700",
+    "DEMO_MODE": "false"
+  },
+  "observability": { "enabled": true }
+}
