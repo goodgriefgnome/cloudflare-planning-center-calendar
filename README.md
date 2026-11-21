@@ -139,7 +139,6 @@ The standalone `/` page and the script embed use exactly the same calendar compo
     --calendar-text: #101729;
     --calendar-accent: #285f82;
     --calendar-background: #ffffff;
-    --calendar-surface: #f4f6f9;
     --calendar-border-radius: 6px;
   "
 ></church-calendar>
@@ -152,17 +151,26 @@ The `timezone` attribute overrides timed-event display, defaulting to the snapsh
 | `--calendar-font-family` | `inherit` |
 | `--calendar-font-size` | `1rem` |
 | `--calendar-text` | `#101729` |
-| `--calendar-muted` | `#545e6c` |
+| `--calendar-muted` | 70% text / 30% background |
 | `--calendar-accent` | `#285f82` (dark enough for normal text on white) |
-| `--calendar-on-accent` | `#fff` |
 | `--calendar-background` | `#fff` |
-| `--calendar-surface` | `#f4f6f9` |
-| `--calendar-border` | `#dce1e7` |
-| `--calendar-hover` | `#e2eaf1` |
+| `--calendar-surface` | 4% text / 96% background |
+| `--calendar-border` | 15% text / 85% background |
 | `--calendar-border-radius` | `.375rem` |
 | `--calendar-padding` | `1rem` |
 | `--calendar-gap` | `3rem` |
 | `--calendar-sticky-offset` | `1rem`; increase to clear a fixed website header |
+
+Muted, surface and border defaults use `color-mix(in srgb, …)` with `--calendar-text` and `--calendar-background`, so changing either base colour also updates the derived colours. Explicit overrides still take precedence. For example:
+
+```css
+--calendar-text: #202020;
+--calendar-background: #ffffff;
+/* Optional: replace the derived border colour. */
+--calendar-border: #cccccc;
+```
+
+The picker has no hover background, selected-date fill or today outline. Today remains bold, event dots remain, and keyboard focus is visible. Its date buttons jump to the list rather than representing a selection that tracks scrolling. All displayed dates on or after today are clickable, including dates from adjacent months. Dates beyond the fetched window may have no corresponding event to jump to. `--calendar-hover` and `--calendar-on-accent` are no longer used.
 
 For more control:
 

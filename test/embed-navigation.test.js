@@ -5,8 +5,9 @@ globalThis.HTMLElement = class {};
 globalThis.customElements = { get() {}, define() {} };
 // A small DOM stand-in for checking rendered grouping, without a layout engine.
 class Node {
-  children = []; dataset = {}; attributes = {};
+  children = []; dataset = {}; attributes = {}; className = '';
   append(...children) { this.children.push(...children); }
+  insertBefore(child, reference) { this.children.splice(this.children.indexOf(reference), 0, child); }
   setAttribute(name, value) { this.attributes[name] = value; }
 }
 globalThis.document = { createElement() { return new Node(); } };
@@ -145,4 +146,26 @@ test('duplicate title descriptions stay hidden and a later instance does not acq
     { ...event('second', '2026-11-23'), eventId: 'series', description: 'Later information.' },
   ];
   assert.deepEqual(descriptions(view), [[], []]);
+});
+
+test('picker enables adjacent-month future dates and disables only past dates', (t) => {
+  t.mock.method(Date, 'now', () => now);
+  const view = component();
+  // December 2026 shows the last days of November and the first days of January.
+  view.selectedMonth = '2026-12'; view.selectedDay = '2026-12-06';
+  // Adjacent dates remain tappable even when they fall beyond the data window.
+  view.snapshot.window = { to: '2027-01-01T00:00:00Z' };
+  const nav = view.renderNavigation();
+  const days = nav.children.find((node) => node.className === 'days').children;
+  const find = (key) => days.find((node) => node.dataset.day === key);
+  assert.equal(find('2026-11-29').disabled, false);
+  assert.equal(find('2027-01-01').disabled, false);
+  assert.equal(find('2026-12-06').attributes['aria-pressed'], undefined);
+  assert.equal(find('2026-12-06').className.includes('selected'), false);
+  view.selectedMonth = '2026-11';
+  const current = view.renderNavigation().children.find((node) => node.className === 'days').children;
+  assert.ok(current.filter((node) => node.dataset.day < view.today).every((node) => node.disabled));
+  assert.ok(current.filter((node) => node.dataset.day >= view.today).every((node) => !node.disabled));
+  const today = current.find((node) => node.dataset.day === view.today);
+  assert.equal(today.className, 'today'); assert.equal(today.attributes['aria-current'], 'date');
 });
