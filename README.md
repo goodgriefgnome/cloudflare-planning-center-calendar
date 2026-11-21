@@ -7,11 +7,12 @@ The calendar has a month navigator and a continuous list grouped by month and da
 ## Architecture
 
 ```text
-Every 15 minutes:
-  Worker Cron → Planning Center → publication filter → public JSON snapshot in KV
-
 Visitors:
   Your website → embed.js → <church-calendar> → Worker /api/events → KV
+
+If the snapshot is missing or approaching 15 minutes old:
+  The request waits → Planning Center → publication filter → complete snapshot in KV
+  The visitor receives the newly fetched snapshot (never the expired one)
 ```
 
 One deployment connects to **one Planning Center organisation**. The default date window is the next calendar year, including events currently in progress. Individual occurrences come from Planning Center; the embed does not generate recurrence rules itself.
@@ -37,7 +38,7 @@ npm run build
 
 `build` bundles a deployment with Wrangler's dry-run mode; it does not publish anything. Tests cover publication rules, public schedules, cancellations, restricted resources, pagination, auth failures, snapshot replacement, stale-data expiry, CORS, daylight saving, and all-day dates. CI runs these checks on pushes and pull requests.
 
-Initial verification: 26 automated tests and the Wrangler deployment dry run pass. Browser QA is still pending because the development environment's preview relay timed out. Before launch, check desktop and mobile layouts, keyboard/focus behaviour in the details dialog, and a cross-origin embed on the actual website, then compare events against your real Planning Center account.
+Automated checks cover the request-driven refresh and strict 15-minute server/browser expiry, in addition to publication and API behaviour. The Wrangler deployment dry run is also checked. Browser QA is still pending because the development environment's preview relay timed out. Before launch, check desktop and mobile layouts, keyboard/focus behaviour in the details dialog, and a cross-origin embed on the actual website, then compare events against your real Planning Center account.
 
 ## Deploy to your own Cloudflare account
 
@@ -48,7 +49,7 @@ npx wrangler login
 npx wrangler kv namespace create CALENDAR
 ```
 
-Replace the placeholder `kv_namespaces[0].id` in `wrangler.jsonc` with the namespace ID returned by Cloudflare. Local development uses local KV rather than the production namespace.
+For a new installation, replace `kv_namespaces[0].id` in `wrangler.jsonc` with the namespace ID returned by Cloudflare. This repository is already configured with the namespace supplied for the St John’s deployment. Local development uses local KV rather than the production namespace.
 
 ### 2. Configure the deployment
 
@@ -62,9 +63,9 @@ Edit `wrangler.jsonc`:
 | `FALLBACK_URL` | Public Church Center calendar link shown if the API reports an outage |
 | `PCO_USER_AGENT` | Identifies the application and supplies a contact URL/email |
 | `PCO_API_VERSION` | Pinned to stable `2026-06-22`; the linked `2026-10-19` documentation was beta when this was written |
-| `MAX_SNAPSHOT_AGE_SECONDS` | Maximum snapshot age; default 2700 seconds (45 minutes) |
+| Snapshot age | Hard limit of 15 minutes in code; expired data is never a fallback |
 | `DEMO_MODE` | Keep `false` in production |
-| `triggers.crons` | Default `*/15 * * * *`, once every 15 minutes in UTC |
+| `triggers.crons` | Empty: no scheduled refreshes |
 
 The supplied origin and fallback values are an example deployment for St John's Darlinghurst. The component and backend naming are general. Replace those values when reusing this project.
 
@@ -89,7 +90,7 @@ npx wrangler secret put PCO_SECRET
 
 Paste each value only into the corresponding interactive secret prompt. Never put secrets in `wrangler.jsonc`, HTML, the repository, or an iframe URL. If Wrangler asks to create the named Worker before setting secrets, allow it to create that Worker.
 
-For local real-data testing, copy `.dev.vars.example` to `.dev.vars` and set the two values there. This file is ignored by Git. `npm run dev` uses real-data mode; it will show an unavailable state until a local scheduled refresh populates KV.
+For local real-data testing, copy `.dev.vars.example` to `.dev.vars` and set the two values there. This file is ignored by Git. `npm run dev` uses real-data mode; opening the calendar fetches the first snapshot on demand. No scheduler URL is needed.
 
 ### 4. Publish and check the first refresh
 
@@ -98,17 +99,15 @@ npm run deploy
 npx wrangler tail
 ```
 
-Cron propagation can take several minutes. Wait for the first successful scheduled refresh (normally within a schedule interval after propagation), then visit `/health` on the calendar domain. An empty KV store returns HTTP 503 until the first successful sync. `/health` exposes only availability, demonstration mode, and the last snapshot timestamp.
+Open the calendar or `/api/events` to trigger the first refresh. A cold start waits for Planning Center before displaying results. Subsequent visitors reuse the snapshot until it approaches 15 minutes old; the first visitor after expiry waits for a complete replacement. If that refresh fails, the calendar shows an unavailable message rather than an old snapshot.
 
-For a local real-data refresh, run this development command and invoke the local scheduler URL:
+`/health` reports whether KV currently contains a fresh snapshot. It does **not** fetch events, so health monitoring does not create upstream traffic. Before the first real calendar visit, or after a quiet period exceeding 15 minutes, `/health` can legitimately return HTTP 503. An empty calendar (`events: []`) is a successful result if no public events match.
 
-```sh
-npx wrangler dev --test-scheduled
-# In another terminal, using the port printed by Wrangler:
-curl 'http://localhost:8787/__scheduled?cron=*/15+*+*+*+*'
-```
+### Moving from the earlier cron version
 
-There is intentionally **no public refresh endpoint** in production. Visitors never cause upstream API requests.
+Redeploy the latest `main` commit through **Workers & Pages → your Worker → Builds/Deployments**. The checked-in empty `triggers.crons` configuration removes the old schedule during deployment. If a trigger still appears under **Settings → Triggers → Cron Triggers**, delete it there. Keep the existing KV namespace and the two runtime secrets; no new Cloudflare service is required. Reload the embedding webpage to load the updated component.
+
+For dashboard-only initial deployment, connect the repository in **Workers & Pages → Create application → GitHub**, name the Worker `planning-center-calendar`, leave the build command blank, and retain the default deploy command. Add `PCO_APPLICATION_ID` and `PCO_SECRET` as **Secret** values under the Worker's **Settings → Variables and Secrets**, not as build variables. Domains and the website embed are configured as described below.
 
 ### 5. Embed on your website
 
@@ -191,13 +190,17 @@ All-day schedule ends are treated as exclusive. Before launch, compare a real si
 
 ### Refresh and failure behaviour
 
-Each scheduled refresh follows every page (`per_page=100`), deduplicates instances, filters, and replaces the entire snapshot with one KV write. This removes deleted/newly hidden/cancelled events without keeping tombstones. A failed page never publishes a partial snapshot. Page cycles, more than 200 pages, or a two-minute sync budget abort the refresh; larger organisations should use a partitioned sync architecture rather than silently truncating data.
+Each request first checks the original timestamp of the stored snapshot. Data older than 15 minutes, future-dated data, and invalid timestamps are never served. Missing/expired snapshots trigger a blocking refresh; there is no stale-while-revalidate path and no 45-minute fallback. A refresh can start up to one second early to leave time for delivery to the browser. The timestamp is taken at the **start** of the upstream fetch so time spent collecting pages counts toward the age limit.
 
-Planning Center `429` responses respect `Retry-After`. Pagination pacing uses the returned rate-limit headers, and transient server errors have bounded retries. Upstream fetches have timeouts and refuse redirects/foreign pagination origins, preventing credential forwarding. There is no per-visitor API fan-out.
+A refresh follows every page (`per_page=100`), deduplicates instances, filters, and replaces the entire snapshot with one KV write. This removes deleted/newly hidden/cancelled events without keeping tombstones. A failed page never publishes a partial snapshot. Page cycles, more than 200 pages, or a two-minute sync budget abort the refresh; larger organisations should use a partitioned sync architecture rather than silently truncating data.
 
-On transient failure, the last complete snapshot remains available for up to 45 minutes from its **original** timestamp. API responses cache for at most 60 seconds, shortened near expiry. A detected `401`/`403` deletes the snapshot. KV propagation and already-cached responses mean revocation is not instantaneous. If you need immediate withdrawal guarantees, use a strongly consistent storage/invalidation design instead.
+Planning Center `429` responses respect `Retry-After`. Pagination pacing uses the returned rate-limit headers, and transient server errors have bounded retries. Upstream fetches have timeouts and refuse redirects/foreign pagination origins, preventing credential forwarding. A detected `401`/`403` deletes the stored snapshot. Other failed refreshes can leave the previous snapshot in storage, but it is never returned after its 15-minute deadline.
 
-The component rechecks every minute while visible and when a page becomes visible again; it does not keep showing events after an unsuccessful recheck. Planning Center edits normally appear after the next 15-minute refresh plus KV propagation, API cache, and frontend recheck time. No refresh timing should be treated as an exact publication guarantee.
+Concurrent requests within one Worker isolate share an in-flight refresh. KV has no global lock: simultaneous visitors in different isolates or KV propagation delays can cause duplicate read-only refreshes. That is an intentional simplicity tradeoff for a low-traffic calendar, not a globally enforced API-call interval. Timestamp checks still prevent expired responses; a refresh returns its freshly fetched result directly instead of re-reading a possibly old KV replica. For global request deduplication at higher traffic, introduce a Durable Object coordinator.
+
+API responses use `Cache-Control: no-store`, and the embed bypasses its HTTP cache. Each response includes the snapshot's remaining lifetime. The browser subtracts the full request duration plus a small margin, then clears the list and closes its details dialog at expiry before requesting a replacement. Both monotonic and wall-clock deadlines are checked; expiry is also checked before interactions. Hidden/page-cached views discard their displayed snapshot and recheck on return. Normal browser timers/event handlers enforce this while the page is running; no JavaScript can update a frozen or suspended browser until it resumes.
+
+There is no background schedule. No visitors (including open visible calendar tabs) means no Planning Center requests. A visible tab fetches again when its displayed snapshot expires so it continues to show fresh data. On failure it shows an unavailable state and retries after 30 seconds while visible; this does not extend a snapshot's lifetime. The 15-minute promise refers to age since the fetch started, not to Planning Center's own internal propagation delay or an atomic point-in-time view across API pages.
 
 CORS allows configured browser origins; it is **not authentication**. Anyone can retrieve this intentionally public snapshot through a non-browser client. Module scripts have wildcard CORS so they can load cross-origin. The standalone page restricts framing to configured origins. No arbitrary upstream proxy, token route, or public admin endpoint is exposed.
 
@@ -205,8 +208,8 @@ CORS allows configured browser origins; it is **not authentication**. Anyone can
 
 - Check `/health` and Worker logs for refresh success, duration, page count, public event count, and skipped records. Logs do not contain event content or API secrets.
 - Set up an availability alert if desired. Alerting is not provisioned by this repository.
-- Expect 96 scheduled refreshes per day, each potentially making several API calls. Verify Cloudflare KV, Worker request, subrequest, and CPU limits against actual traffic and the chosen plan.
-- A single Worker schedule is intended. Avoid concurrent manual sync writers. The bounded two-minute sync is shorter than the 15-minute interval; this is not a distributed locking system.
+- Refreshes follow actual calendar usage. Each refresh can make several API calls. Verify Cloudflare KV, Worker request, subrequest, and CPU limits against actual traffic and the chosen plan.
+- There is no cron, alarm, or public admin refresh endpoint. Opening `/api/events` is the ordinary read-and-refresh path; `/health` never refreshes.
 - Rotate/revoke PATs in Planning Center if exposed. Update both Worker secrets and verify the next refresh.
 - For several churches, Planning Center requires OAuth rather than shared PATs. That needs separate tenant configuration, token storage/refresh, and snapshot isolation; generic names do not make this a multi-tenant service.
 
@@ -219,7 +222,6 @@ CORS allows configured browser origins; it is **not authentication**. Anyone can
 - [EventTime](https://api.planningcenteronline.com/docs/apps/calendar/versions/2026-06-22/vertices/event_time)
 - [Rate limits](https://api.planningcenteronline.com/docs/overview/rate-limiting)
 - [Cloudflare Worker static assets](https://developers.cloudflare.com/workers/static-assets/)
-- [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [Workers KV consistency](https://developers.cloudflare.com/kv/concepts/how-kv-works/)
 
 ## Licence

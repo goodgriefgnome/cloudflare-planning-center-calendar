@@ -1,9 +1,11 @@
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import { remainingFreshness } from '../src/freshness.js';
 import { config, dateKey, safeUrl, windowBounds } from '../src/config.js';
 import { normalize, plainText } from '../src/normalize.js';
 import { fetchInstances, instanceUrl, UpstreamError } from '../src/pco.js';
-import { handleFetch, SNAPSHOT_KEY, sync } from '../src/worker.js';
+import worker, { getFreshSnapshot, handleFetch, SNAPSHOT_KEY, sync } from '../src/worker.js';
 import { eventDates, keyForDate, monthDays, monthShift, timeLabel } from '../public/dates.js';
 
 const now = new Date('2026-11-21T00:00:00Z');
@@ -153,7 +155,7 @@ function memoryKV(initial) {
   };
 }
 function environment(snapshot) {
-  return { ...secrets, CALENDAR: memoryKV(snapshot), ALLOWED_ORIGINS: 'https://www.example.org', TIMEZONE: 'Australia/Sydney', MAX_SNAPSHOT_AGE_SECONDS: '2700' };
+  return { ...secrets, CALENDAR: memoryKV(snapshot), ALLOWED_ORIGINS: 'https://www.example.org', TIMEZONE: 'Australia/Sydney' };
 }
 function freshSnapshot() { return { schemaVersion: 1, generatedAt: new Date().toISOString(), events: [], timezone: 'Australia/Sydney', window: bounds }; }
 
@@ -184,19 +186,98 @@ test('API allows configured origins and rejects others without permissive CORS',
   assert.equal(sameOrigin.status, 200);
 });
 
-test('API rejects stale data and never extends cache past expiry', async () => {
+test('API refreshes expired data before responding and does not cache responses', async () => {
   const request = new Request('https://calendar.example.org/api/events');
-  const stale = { ...freshSnapshot(), generatedAt: new Date(Date.now() - 2800_000).toISOString() };
-  const response = await handleFetch(request, environment(stale));
-  assert.equal(response.status, 503); assert.equal(response.headers.get('Cache-Control'), 'no-store');
-  const nearlyStale = { ...freshSnapshot(), generatedAt: new Date(Date.now() - 2690_000).toISOString() };
-  const good = await handleFetch(request, environment(nearlyStale));
-  assert.match(good.headers.get('Cache-Control'), /max-age=(9|10), must-revalidate/);
+  const stale = { ...freshSnapshot(), generatedAt: new Date(Date.now() - 900_000).toISOString() };
+  const env = environment(stale); let calls = 0;
+  const response = await handleFetch(request, env, { fetcher: async () => { calls++; return page([]); } });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  const data = await response.json();
+  assert.ok(data.freshForMs > 0 && data.freshForMs <= 900_000);
+  assert.notEqual(data.generatedAt, stale.generatedAt);
+  assert.equal(calls, 1);
+  const cached = await handleFetch(request, env, { fetcher: async () => { throw new Error('Unexpected refresh'); } });
+  assert.equal(cached.status, 200);
+});
+
+test('API never serves an expired snapshot on refresh failure', async () => {
+  const env = environment({ ...freshSnapshot(), generatedAt: new Date(Date.now() - 901_000).toISOString(), events: [{ title: 'Expired event' }] });
+  const response = await handleFetch(new Request('https://calendar.example.org/api/events'), env, { fetcher: async () => new Response('', { status: 400 }) });
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  assert.equal(response.headers.get('Retry-After'), '30');
+  assert.equal((await response.json()).events, undefined);
+});
+
+test('cold start waits for a complete refresh', async () => {
+  const env = environment(); let calls = 0;
+  const response = await handleFetch(new Request('https://calendar.example.org/api/events'), env, { fetcher: async () => { calls++; return page([]); } });
+  assert.equal(response.status, 200); assert.equal(calls, 1);
+  assert.deepEqual((await response.json()).events, []);
+});
+
+test('simultaneous visitors in one isolate share one complete refresh', async () => {
+  const env = environment(); let calls = 0; let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const options = { fetcher: async () => { calls++; await gate; return page([]); } };
+  const requests = Array.from({ length: 12 }, () => getFreshSnapshot(env, options));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1); release();
+  const snapshots = await Promise.all(requests);
+  assert.ok(snapshots.every((snapshot) => snapshot === snapshots[0]));
+});
+
+test('failed refresh releases the local lock for the next visitor', async () => {
+  const env = environment();
+  await assert.rejects(getFreshSnapshot(env, { fetcher: async () => new Response('', { status: 400 }) }));
+  const snapshot = await getFreshSnapshot(env, { fetcher: async () => page([]) });
+  assert.ok(remainingFreshness(snapshot) > 0);
+});
+
+test('KV propagation cannot cause expired data to be returned after a refresh', async () => {
+  const env = environment();
+  env.CALENDAR.get = async () => ({ ...freshSnapshot(), generatedAt: new Date(Date.now() - 901_000).toISOString(), events: [{ title: 'Old replica' }] });
+  const response = await handleFetch(new Request('https://calendar.example.org/api/events'), env, { fetcher: async () => page([]) });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).events, []);
+});
+
+test('health checks and preflights do not call Planning Center or refresh', async () => {
+  const env = environment(); const options = { fetcher: async () => { throw new Error('Monitoring must not refresh'); } };
+  const health = await handleFetch(new Request('https://calendar.example.org/health'), env, options);
+  assert.equal(health.status, 503);
+  const preflight = await handleFetch(new Request('https://calendar.example.org/api/events', { method: 'OPTIONS', headers: { Origin: 'https://www.example.org' } }), env, options);
+  assert.equal(preflight.status, 204);
+  assert.equal(await env.CALENDAR.get(SNAPSHOT_KEY, 'json'), null);
+});
+
+test('freshness expires at exactly 15 minutes and rejects future/invalid timestamps', () => {
+  const timestamp = now.getTime(); const snapshot = { schemaVersion: 1, generatedAt: now.toISOString() };
+  assert.equal(remainingFreshness(snapshot, timestamp), 900_000);
+  assert.equal(remainingFreshness(snapshot, timestamp + 899_999), 1);
+  assert.equal(remainingFreshness(snapshot, timestamp + 900_000), 0);
+  assert.equal(remainingFreshness(snapshot, timestamp - 1), 0);
+  assert.equal(remainingFreshness({ ...snapshot, generatedAt: 'bad' }, timestamp), 0);
+});
+
+test('time spent fetching upstream pages counts toward the snapshot age', async () => {
+  let time = now.getTime();
+  await assert.rejects(getFreshSnapshot(environment(), {
+    clock: () => time,
+    fetcher: async () => { time += 900_000; return page([]); },
+  }), /Refresh has already expired/);
+});
+
+test('deployment has no cron schedule or scheduled handler', () => {
+  const wrangler = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+  assert.match(wrangler, /"crons"\s*:\s*\[\s*\]/);
+  assert.equal(worker.scheduled, undefined);
 });
 
 test('sample data only appears when explicitly enabled, production without snapshot fails closed', async () => {
   const request = new Request('https://calendar.example.org/api/events');
-  assert.equal((await handleFetch(request, environment())).status, 503);
+  assert.equal((await handleFetch(request, { ...environment(), PCO_APPLICATION_ID: '' })).status, 503);
   const demo = await handleFetch(request, { ...environment(), DEMO_MODE: 'true' });
   assert.equal((await demo.json()).demo, true);
 });
@@ -210,7 +291,6 @@ test('asset responses permit cross-origin modules and restrict framing of standa
   assert.equal((await handleFetch(new Request('https://calendar.example.org/.dev.vars'), env)).status, 404);
 });
 
-test('configuration rejects wildcard origins and invalid freshness settings', () => {
+test('configuration rejects wildcard origins', () => {
   assert.throws(() => config({ ALLOWED_ORIGINS: '*' }));
-  assert.throws(() => config({ MAX_SNAPSHOT_AGE_SECONDS: 'garbage' }));
 });

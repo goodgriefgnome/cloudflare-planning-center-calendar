@@ -1,17 +1,13 @@
 export function config(env) {
   const timezone = env.TIMEZONE || 'Australia/Sydney';
   new Intl.DateTimeFormat('en', { timeZone: timezone }).format();
-  const maxAge = Number(env.MAX_SNAPSHOT_AGE_SECONDS || 2700);
-  if (!Number.isFinite(maxAge) || maxAge < 60 || maxAge > 86400) {
-    throw new Error('MAX_SNAPSHOT_AGE_SECONDS must be between 60 and 86400');
-  }
   const origins = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
   for (const origin of origins) {
     if (new URL(origin).origin !== origin || !/^https?:\/\//.test(origin)) {
       throw new Error('ALLOWED_ORIGINS must contain exact HTTP(S) origins');
     }
   }
-  return { timezone, maxAge, origins, fallbackUrl: safeUrl(env.FALLBACK_URL) };
+  return { timezone, origins, fallbackUrl: safeUrl(env.FALLBACK_URL) };
 }
 
 export function safeUrl(value) {

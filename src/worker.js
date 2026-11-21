@@ -2,12 +2,32 @@ import { config, windowBounds } from './config.js';
 import { demoSnapshot } from './demo.js';
 import { fetchInstances, UpstreamError } from './pco.js';
 import { normalize } from './normalize.js';
+import { remainingFreshness } from './freshness.js';
 
 export const SNAPSHOT_KEY = 'public-snapshot-v1';
 
+// Coalesce requests within one Worker isolate. KV has no global lock: visitors
+// in different isolates can occasionally perform duplicate (safe, read-only) refreshes.
+const refreshes = new WeakMap();
+
+export async function getFreshSnapshot(env, options = {}) {
+  const clock = options.clock || Date.now;
+  const snapshot = await env.CALENDAR.get(SNAPSHOT_KEY, 'json');
+  if (remainingFreshness(snapshot, clock()) > 1000) return snapshot;
+  const existing = refreshes.get(env.CALENDAR);
+  if (existing) return existing;
+  const pending = sync(env, options).then((result) => {
+    if (remainingFreshness(result, clock()) <= 0) throw new Error('Refresh has already expired');
+    return result;
+  });
+  refreshes.set(env.CALENDAR, pending);
+  try { return await pending; }
+  finally { if (refreshes.get(env.CALENDAR) === pending) refreshes.delete(env.CALENDAR); }
+}
+
 export async function sync(env, options = {}) {
   const started = Date.now();
-  const now = options.now || new Date();
+  const now = options.now || new Date(options.clock ? options.clock() : Date.now());
   try {
     const { timezone } = config(env);
     const window = windowBounds(now);
@@ -28,7 +48,7 @@ export async function sync(env, options = {}) {
   }
 }
 
-export async function handleFetch(request, env) {
+export async function handleFetch(request, env, options = {}) {
   const url = new URL(request.url);
   const settings = config(env);
   const origin = request.headers.get('Origin');
@@ -57,20 +77,28 @@ export async function handleFetch(request, env) {
       return json({ error: 'Method not allowed' }, 405);
     }
     const demo = env.DEMO_MODE === 'true';
-    const snapshot = demo ? demoSnapshot(settings.timezone) : await env.CALENDAR.get(SNAPSHOT_KEY, 'json');
-    const age = snapshot ? (Date.now() - Date.parse(snapshot.generatedAt)) / 1000 : Infinity;
-    const available = snapshot?.schemaVersion === 1 && age >= -60 && age < settings.maxAge;
     if (url.pathname === '/health') {
+      // Monitoring must not create Planning Center traffic.
+      const snapshot = demo ? demoSnapshot(settings.timezone) : await env.CALENDAR.get(SNAPSHOT_KEY, 'json');
+      const available = remainingFreshness(snapshot) > 0;
       return json({ available, demo, generatedAt: snapshot?.generatedAt || null }, available ? 200 : 503);
     }
-    if (!available) return json({ error: 'Calendar temporarily unavailable', fallbackUrl: settings.fallbackUrl }, 503);
-    // Never cache a snapshot beyond its freshness deadline.
-    headers.set('Cache-Control', `public, max-age=${Math.max(0, Math.min(60, Math.floor(settings.maxAge - age)))}, must-revalidate`);
+    let snapshot;
+    try { snapshot = demo ? demoSnapshot(settings.timezone) : await getFreshSnapshot(env, options); }
+    catch {
+      headers.set('Retry-After', '30');
+      return json({ error: 'Calendar temporarily unavailable', fallbackUrl: settings.fallbackUrl }, 503);
+    }
+    const freshForMs = remainingFreshness(snapshot);
+    if (freshForMs <= 0) return json({ error: 'Calendar temporarily unavailable', fallbackUrl: settings.fallbackUrl }, 503);
+    // Reuse KV, not browser/CDN responses. Every response carries its remaining
+    // lifetime so a page left open also removes the data at the deadline.
+    headers.set('Cache-Control', 'no-store');
     if (request.method === 'HEAD') return new Response(null, { headers });
-    return json({ ...snapshot, fallbackUrl: settings.fallbackUrl });
+    return json({ ...snapshot, freshForMs, fallbackUrl: settings.fallbackUrl });
   }
   if (!['GET', 'HEAD'].includes(request.method)) return json({ error: 'Method not allowed' }, 405);
-  if (!['/', '/index.html', '/embed.js', '/dates.js'].includes(url.pathname)) return new Response('Not found', { status: 404 });
+  if (!['/', '/index.html', '/embed.js', '/dates.js', '/freshness.js'].includes(url.pathname)) return new Response('Not found', { status: 404 });
   const asset = await env.ASSETS.fetch(request);
   const assetHeaders = new Headers(asset.headers);
   assetHeaders.set('X-Content-Type-Options', 'nosniff');
@@ -92,8 +120,5 @@ export default {
     catch {
       return Response.json({ error: 'Calendar configuration or storage unavailable' }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
     }
-  },
-  async scheduled(_controller, env, ctx) {
-    if (env.DEMO_MODE !== 'true') ctx.waitUntil(sync(env));
   },
 };

@@ -10,14 +10,13 @@
   },
   // Calendar snapshot storage namespace in this Cloudflare account.
   "kv_namespaces": [{ "binding": "CALENDAR", "id": "e39f81696e3941219e1faf8e821d8be1" }],
-  "triggers": { "crons": ["*/15 * * * *"] },
+  "triggers": { "crons": [] },
   "vars": {
     "TIMEZONE": "Australia/Sydney",
     "ALLOWED_ORIGINS": "https://www.stjohnsanglican.org.au,https://stjohnsanglican.org.au",
     "FALLBACK_URL": "https://stjohnsdarlinghurst.churchcenter.com/calendar?view=list",
     "PCO_API_VERSION": "2026-06-22",
     "PCO_USER_AGENT": "Planning Center Calendar Embed (https://github.com/goodgriefgnome/cloudflare-planning-center-calendar)",
-    "MAX_SNAPSHOT_AGE_SECONDS": "2700",
     "DEMO_MODE": "false"
   },
   "observability": { "enabled": true }

@@ -1,3 +1,4 @@
+import { deadlinePassed, displayLifetime } from './freshness.js';
 import { eventDates, keyForDate, labelDate, monthDays, monthShift, timeLabel } from './dates.js';
 
 const DEFAULT_API = new URL('/api/events', import.meta.url).href;
@@ -85,9 +86,15 @@ export class ChurchCalendar extends HTMLElement {
     this.shadowRoot.append(style, this.main, this.dialog);
     this.main.addEventListener('click', (event) => this.onClick(event));
     this.main.addEventListener('change', (event) => {
-      if (event.target.matches('[data-month-select]')) this.selectMonth(event.target.value, 'select');
+      if (event.target.matches('[data-month-select]')) {
+        if (!this.hasFreshSnapshot()) { this.clearSnapshot(); this.load(); return; }
+        this.selectMonth(event.target.value, 'select');
+      }
     });
     this.dialog.addEventListener('click', (event) => {
+      if (!this.hasFreshSnapshot()) {
+        event.preventDefault(); this.clearSnapshot(); this.load(); return;
+      }
       if (event.target.closest('[data-close]')) this.dialog.close();
       else if (event.target === this.dialog) {
         const r = this.dialog.getBoundingClientRect();
@@ -95,38 +102,71 @@ export class ChurchCalendar extends HTMLElement {
       }
     });
     this.dialog.addEventListener('close', () => this.lastTrigger?.focus({ preventScroll: true }));
-    this.onVisibility = () => { if (!document.hidden) this.load(); };
+    this.onVisibility = () => {
+      if (document.hidden) { this.controller?.abort(); this.clearSnapshot(); clearTimeout(this.retryTimer); }
+      else this.load(true);
+    };
+    this.onPageHide = () => { this.controller?.abort(); this.clearSnapshot(); clearTimeout(this.retryTimer); };
+    this.onPageShow = (event) => { if (event.persisted && !document.hidden) this.load(true); };
   }
 
   connectedCallback() {
     this.load();
-    this.timer = setInterval(() => { if (!document.hidden) this.load(); }, 60_000);
     document.addEventListener('visibilitychange', this.onVisibility);
+    window.addEventListener('pagehide', this.onPageHide);
+    window.addEventListener('pageshow', this.onPageShow);
   }
 
   disconnectedCallback() {
-    clearInterval(this.timer);
+    clearTimeout(this.expiryTimer);
+    clearTimeout(this.retryTimer);
     document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('pagehide', this.onPageHide);
+    window.removeEventListener('pageshow', this.onPageShow);
     this.controller?.abort();
     if (this.dialog.open) this.dialog.close();
   }
 
   attributeChangedCallback() {
-    if (this.isConnected) { this.selectedMonth = null; this.snapshot = null; this.load(); }
+    if (this.isConnected) { this.selectedMonth = null; this.clearSnapshot(); this.load(true); }
   }
 
-  async load() {
+  hasFreshSnapshot() {
+    return this.snapshot && !deadlinePassed(this.deadline, performance.now(), Date.now());
+  }
+
+  clearSnapshot() {
+    clearTimeout(this.expiryTimer);
+    this.deadline = null;
+    this.snapshot = null;
+    if (this.dialog.open) this.dialog.close();
+    this.showStatus('Loading events…');
+  }
+
+  async load(force = false) {
+    if (this.loading && !force) return;
+    this.loading = true;
+    clearTimeout(this.retryTimer);
     this.controller?.abort();
     const controller = new AbortController(); this.controller = controller;
-    if (!this.snapshot) this.showStatus('Loading events…');
+    if (!this.hasFreshSnapshot()) this.clearSnapshot();
+    const started = performance.now(), wallStarted = Date.now();
     try {
       const endpoint = new URL(this.getAttribute('api-url') || DEFAULT_API, document.baseURI);
       if (!['https:', 'http:'].includes(endpoint.protocol)) throw new Error('Invalid API URL');
-      const response = await fetch(endpoint, { signal: controller.signal, credentials: 'omit' });
+      const response = await fetch(endpoint, { signal: controller.signal, credentials: 'omit', cache: 'no-store' });
       const data = await response.json();
-      if (controller.signal.aborted || !this.isConnected) return;
+      if (controller.signal.aborted || !this.isConnected || document.hidden) return;
       this.fallbackUrl = httpsUrl(data.fallbackUrl);
       if (!response.ok || data.schemaVersion !== 1 || !Array.isArray(data.events)) throw new Error('Events unavailable');
+      const lifetime = displayLifetime(data.freshForMs, Math.max(performance.now() - started, Date.now() - wallStarted));
+      if (lifetime <= 0) throw new Error('Snapshot expired in transit');
+      clearTimeout(this.expiryTimer);
+      this.deadline = { monotonic: performance.now() + lifetime, wall: Date.now() + lifetime };
+      this.expiryTimer = setTimeout(() => {
+        this.clearSnapshot();
+        if (!document.hidden) this.load();
+      }, lifetime);
       this.timezone = this.getAttribute('timezone') || data.timezone;
       new Intl.DateTimeFormat('en', { timeZone: this.timezone }).format();
       this.today = keyForDate(new Date(), this.timezone);
@@ -143,11 +183,14 @@ export class ChurchCalendar extends HTMLElement {
           if (current) this.fillDialog(current); else this.dialog.close();
         }
       }
+      if (!this.hasFreshSnapshot()) throw new Error('Snapshot expired while rendering');
     } catch (error) {
       if (controller.signal.aborted || !this.isConnected) return;
-      this.snapshot = null;
-      if (this.dialog.open) this.dialog.close();
+      this.clearSnapshot();
       this.showStatus('The calendar is temporarily unavailable. Please try again shortly.', true);
+      this.retryTimer = setTimeout(() => { if (!document.hidden) this.load(); }, 30_000);
+    } finally {
+      if (this.controller === controller) this.loading = false;
     }
   }
 
@@ -270,6 +313,7 @@ export class ChurchCalendar extends HTMLElement {
     const target = event.target.closest('button');
     if (!target || target.disabled) return;
     if (target.hasAttribute('data-retry')) { this.load(); return; }
+    if (!this.hasFreshSnapshot()) { this.clearSnapshot(); this.load(); return; }
     if (target.dataset.event) {
       const data = this.snapshot.events.find((item) => item.id === target.dataset.event);
       if (data) { this.lastTrigger = target; this.openId = data.id; this.fillDialog(data); this.dialog.showModal(); }
