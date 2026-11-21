@@ -160,6 +160,9 @@ test('picker enables adjacent-month future dates and disables only past dates', 
   const find = (key) => days.find((node) => node.dataset.day === key);
   assert.equal(find('2026-11-29').disabled, false);
   assert.equal(find('2027-01-01').disabled, false);
+  assert.equal(find('2026-11-29').className, 'outside-month');
+  assert.equal(find('2027-01-01').className, 'outside-month');
+  assert.equal(find('2026-12-06').className, '');
   assert.equal(find('2026-12-06').attributes['aria-pressed'], undefined);
   assert.equal(find('2026-12-06').className.includes('selected'), false);
   view.selectedMonth = '2026-11';

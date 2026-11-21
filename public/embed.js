@@ -7,7 +7,8 @@ const STYLE = `
   *, *::before, *::after { box-sizing:border-box; }
   button, select { font:inherit; color:inherit; }
   button { cursor:pointer; }
-  button:disabled { cursor:default; opacity:.35; }
+  button:disabled { cursor:default; }
+  button:disabled, .days .outside-month { opacity:.35; }
   button:focus-visible, a:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline:3px solid var(--calendar-accent,var(--calendar-text,#101729)); outline-offset:4px; }
   a { color:var(--calendar-accent,var(--calendar-text,#101729)); text-underline-offset:.2em; }
   .layout { display:grid; grid-template-columns:17rem minmax(0,1fr); gap:var(--calendar-gap,3rem); align-items:start; background:var(--calendar-background,#fff); padding:var(--calendar-padding,1rem); }
@@ -222,7 +223,7 @@ export class ChurchCalendar extends HTMLElement {
       counts.set(key, (counts.get(key) || 0) + 1);
     }
     for (const day of monthDays(this.selectedMonth)) {
-      const classes = day.key === this.today ? 'today' : '';
+      const classes = [day.key === this.today ? 'today' : '', !day.inMonth ? 'outside-month' : ''].filter(Boolean).join(' ');
       const button = element('button', classes, String(day.day)); button.dataset.day = day.key; button.setAttribute('part', 'day');
       button.disabled = day.key < this.today;
       const count = counts.get(day.key) || 0;
