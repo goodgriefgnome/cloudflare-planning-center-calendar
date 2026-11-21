@@ -34,6 +34,7 @@ test('publishes occurrence overrides and public times, excluding private fields 
   assert.equal(event.imageUrl, null);
   assert.equal(event.internal_note, undefined);
   assert.equal(event.title, 'Sunday gathering');
+  assert.equal(event.eventId, 'event-1');
 });
 
 for (const [attribute, value] of [['visible_in_church_center', false], ['link_only', true], ['link_only', undefined], ['approval_status', 'P'], ['approval_status', 'R']]) {

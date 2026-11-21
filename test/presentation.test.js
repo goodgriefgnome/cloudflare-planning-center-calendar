@@ -63,7 +63,7 @@ test('an actual range across repeated DST wall time does not become a time point
   assert.equal(timeLabel(event, zone), '2:30am AEDT–2:30am AEST');
 });
 
-test('location, registration and image alone do not require a details panel', () => {
+test('location, registration and image alone do not supply an additional description', () => {
   const event = timed('10:00', '11:00', { location: 'Church hall', registrationUrl: 'https://example.org/register', imageUrl: 'https://example.org/image.jpg' });
   assert.equal(additionalDescription(event, zone), '');
   for (const description of ['Community lunch', '  COMMUNITY LUNCH.  ', 'Church hall', '10–11am']) {

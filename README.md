@@ -2,7 +2,7 @@
 
 A reusable, themeable event-list embed powered by Planning Center Calendar, Cloudflare Workers, and Workers KV. MIT licensed.
 
-The calendar has a month navigator and a continuous list grouped by month and day. Location and registration appear directly in each event row. Titles with an additional description show an ⓘ indicator and open an accessible native dialog over the host webpage; other titles are ordinary text. It uses a web component with Shadow DOM, with CSS custom properties and `::part()` hooks for custom styling. No frontend framework, visitor login, cookies, database, or client-side credentials are required.
+The calendar has a month navigator and a continuous list grouped by month and day. Location and registration appear directly in each event row. Public descriptions appear directly below each event; for repeated occurrences of the same parent event, only the first displayed occurrence shows its description. All titles are ordinary text. It uses a web component with Shadow DOM, with CSS custom properties and `::part()` hooks for custom styling. No frontend framework, visitor login, cookies, database, or client-side credentials are required.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ npm run build
 
 The suite also runs the Planning Center client inside Cloudflare's local Workers runtime (Miniflare/workerd), with outbound requests intercepted. This checks runtime-specific fetch options and verifies that redirects are rejected without forwarding credentials. It needs no real API credentials or external requests.
 
-Automated checks cover request-driven background refresh, retention after failures, snapshot timestamps, publication, and API behaviour. The Wrangler deployment dry run is also checked. Browser QA is still pending because the development environment's preview relay timed out. Before launch, check desktop and mobile layouts, keyboard/focus behaviour in the details dialog, and a cross-origin embed on the actual website, then compare events against your real Planning Center account.
+Automated checks cover request-driven background refresh, retention after failures, snapshot timestamps, publication, and API behaviour. The Wrangler deployment dry run is also checked. Browser QA is still pending because the development environment's preview relay timed out. Before launch, check desktop and mobile layouts, keyboard date navigation and inline recurring descriptions, and a cross-origin embed on the actual website, then compare events against your real Planning Center account.
 
 ## Deploy to your own Cloudflare account
 
@@ -123,9 +123,9 @@ Paste this into a custom HTML/JavaScript block, changing the hostname as needed:
 <church-calendar></church-calendar>
 ```
 
-See [examples/stjohns.html](examples/stjohns.html) for the branded configuration. If the website has a Content Security Policy, allow the calendar origin under `script-src` and `connect-src`, and the Planning Center image hosts under `img-src`. The component injects a stylesheet into its shadow root; the host CSP must allow that style (commonly through `style-src 'unsafe-inline'`). A stricter nonce-only host policy needs a corresponding stylesheet/nonce adaptation before use.
+See [examples/stjohns.html](examples/stjohns.html) for the branded configuration. If the website has a Content Security Policy, allow the calendar origin under `script-src` and `connect-src`. The component injects a stylesheet into its shadow root; the host CSP must allow that style (commonly through `style-src 'unsafe-inline'`). A stricter nonce-only host policy needs a corresponding stylesheet/nonce adaptation before use.
 
-For a cross-origin local test, add the exact local host origin to `ALLOWED_ORIGINS` and use `api-url` if serving the component from another development origin. Plain HTTP is supported for local preview; production links and images require HTTPS.
+For a cross-origin local test, add the exact local host origin to `ALLOWED_ORIGINS` and use `api-url` if serving the component from another development origin. Plain HTTP is supported for local preview; production links require HTTPS.
 
 ## Customisation
 
@@ -163,31 +163,29 @@ The `timezone` attribute overrides timed-event display, defaulting to the snapsh
 | `--calendar-padding` | `1rem` |
 | `--calendar-gap` | `3rem` |
 | `--calendar-sticky-offset` | `1rem`; increase to clear a fixed website header |
-| `--calendar-dialog-radius` | Falls back to the main border radius |
-| `--calendar-dialog-padding` | `1.75rem` |
-| `--calendar-backdrop` | `rgba(12,20,35,.65)` |
 
 For more control:
 
 ```css
 church-calendar::part(event-title) { font-weight: 700; }
 church-calendar::part(month-heading) { font-family: Georgia, serif; }
-church-calendar::part(dialog) { max-width: 48rem; }
 ```
 
-Available parts: `calendar`, `layout`, `navigation`, `month-select`, `day`, `list`, `month-heading`, `date-heading`, `event`, `event-title`, `event-info`, `event-time`, `event-location`, `event-registration`, `dialog`, `dialog-content`, `dialog-title`, `dialog-image`, `description`, `close-button`, `registration-link`, `last-updated`.
+Available parts: `calendar`, `layout`, `navigation`, `month-select`, `day`, `list`, `month-heading`, `date-heading`, `event`, `event-title`, `event-time`, `event-location`, `event-registration`, `description`, `last-updated`.
 
-The navigation stacks above the list when the **component's container** is narrow, even on a wide desktop. Month changes affect only the picker; the list always retains all upcoming events from today onward. Selecting a day scrolls to the next listed event on or after it within the component’s scroll container, without moving the surrounding webpage. Give the component a fixed height and `overflow-y: auto` to enable internal scrolling; without an internal scroll container, date selection focuses the matching section without scrolling the page. The details dialog uses the host webpage's top layer, supports Escape/backdrop/Close, and restores focus. Registration links open in new tabs. Event details contain no Church Center link. An iframe remains possible, but any dialog inside it is confined to the iframe viewport.
+The navigation stacks above the list when the **component's container** is narrow, even on a wide desktop. Month changes affect only the picker; the list always retains all upcoming events from today onward. Selecting a day scrolls to the next listed event on or after it within the component’s scroll container, without moving the surrounding webpage. Give the component a fixed height and `overflow-y: auto` to enable internal scrolling; without an internal scroll container, date selection focuses the matching section without scrolling the page. Registration links open in new tabs. Descriptions are inline; there is no details dialog or Church Center link. An iframe remains possible.
 
 The footnote below the calendar shows **Last updated** in the configured calendar timezone. It uses `fetchedAt`, recorded after the complete upstream fetch and normalisation have succeeded; older snapshots fall back to `generatedAt`. It does not advance on a cache read, page load, or failed refresh. Style it with `church-calendar::part(last-updated)`.
 
 ### Event presentation
 
-The day heading supplies the date. Single-day all-day events have no time subtitle. Timed events use compact labels such as `at 6pm`, `6–7pm`, `9:30–11am`, or `11am–2pm`. Overnight events say `11pm–12am next day`; longer events use `6pm · until 24 Nov, 10am`, or only `until 24 Nov` for all-day events. Crossing into a new year includes the end year. Details show the full date once, with the same compact times; all-day details show dates only.
+The day heading supplies the date. Single-day all-day events have no time subtitle. Timed events use compact labels such as `at 6pm`, `6–7pm`, `9:30–11am`, or `11am–2pm`. Overnight events say `11pm–12am next day`; longer events use `6pm · until 24 Nov, 10am`, or only `until 24 Nov` for all-day events. Crossing into a new year includes the end year.
 
 Genuine recurrence patterns share the subtitle, for example `10–11am · Every other Tuesday` or `11:30am–2pm · Second Sunday of each month`. The original recurrence start date and duplicate schedule prose/times are omitted. One-off API descriptions such as `Sunday, November 29, 2026 from start of day to end of day` are not treated as recurrence patterns.
 
-A second row shows a location pin and the public location, a direct **Register** link, or both. The title is a button with an ⓘ icon only when its public description adds information. Exact repetitions of the title or already displayed location/schedule do not qualify. An image, location or registration link alone does not create a details panel. Plain titles have no hover underline or click action. Keyboard users can open the indicated details with Enter/Space and close with Escape.
+A second row shows a location pin and the public location, a direct **Register** link, or both. Public descriptions appear as plain text below these details, preserving line breaks. Exact repetitions of the title or already displayed location/schedule are omitted. All titles are ordinary text with no icon or click action; there is no details dialog.
+
+Only the first displayed occurrence of each Planning Center parent event shows its description. The grouping uses the parent `eventId`, never the event title. Changing the picker month does not change which occurrence has the description. When an earlier occurrence is no longer displayed, the next occurrence can show the description. Older cached snapshots without `eventId` keep their descriptions until a successful background refresh supplies the series identities.
 
 ## Publication and privacy rules
 
@@ -201,7 +199,7 @@ The authenticated API is not a public feed. The Worker explicitly requires:
 
 Hidden, link-only, pending, rejected, cancelled, blockout, or restricted/stub resources are excluded. Missing publication fields fail closed. Public `EventTime` entries (`visible_on_widget_and_ical === true`) determine the public start/end envelope. If unavailable, explicit-offset ISO `published_starts_at`/`published_ends_at` may be used. Raw `starts_at`/`ends_at` are used for the upstream overlap query **only**, never for display. Multiple public schedule blocks are represented by their earliest start and latest end.
 
-Only normalised presentation fields are stored in KV: title, public times, local dates, location, plain text public description, recurrence label, safe image/details/registration URLs, and tags. Rich text is converted to plain text and inserted with `textContent`; HTML is never executed. Links/images require HTTPS and cannot contain URL credentials. The internal owner, bookings, notes, and API response are never exposed or stored. A parent summary is the description fallback when the occurrence description is absent.
+Only normalised presentation fields are stored in KV: occurrence and parent event IDs, title, public times, local dates, location, plain text public description, recurrence label, safe image/details/registration URLs, and tags. Rich text is converted to plain text and inserted with `textContent`; HTML is never executed. Links/images require HTTPS and cannot contain URL credentials. The internal owner, bookings, notes, and API response are never exposed or stored. A parent summary is the description fallback when the occurrence description is absent.
 
 All-day schedule ends are treated as exclusive. Before launch, compare a real single-day and multi-day event against Church Center to confirm that assumption for your data. Also compare public/setup times and approval policies with your church's workflow. This integration has fixture tests; authenticating against your organisation is a separate launch check.
 
@@ -215,7 +213,7 @@ Page cycles, more than 200 pages, or a two-minute fetch budget abort the refresh
 
 Concurrent requests within one Worker isolate share an in-flight refresh. Each isolate retains its latest successful snapshot so an older KV replica cannot replace it and a temporary KV read outage need not blank that instance. A failed refresh sets a 30-second retry backoff in that isolate. KV has no global lock: simultaneous visitors in different isolates can still cause duplicate read-only refreshes. For global deduplication at higher traffic, introduce a Durable Object coordinator.
 
-API responses use `Cache-Control: no-store` so HTTP caches do not hide an updated KV snapshot. A visible embed checks the API every minute, or after 10 seconds when the response indicates a background refresh. It retains its displayed events, open dialog, and last-updated footnote if a request fails, and retries after 30 seconds. Hidden tabs stop checks and recheck on return without clearing their successful data. A successful response updates the display and footnote. The old `freshForMs` field and `/freshness.js` module are retained for cached older embeds during rollout; current components do not use a display expiry.
+API responses use `Cache-Control: no-store` so HTTP caches do not hide an updated KV snapshot. A visible embed checks the API every minute, or after 10 seconds when the response indicates a background refresh. It retains its displayed events, descriptions, and last-updated footnote if a request fails, and retries after 30 seconds. Hidden tabs stop checks and recheck on return without clearing their successful data. A successful response updates the display and footnote. The old `freshForMs` field and `/freshness.js` module are retained for cached older embeds during rollout; current components do not use a display expiry.
 
 There is no cron or background schedule. No visitors (including open visible calendar tabs) means no Planning Center requests. The 15-minute threshold controls when a refresh is attempted, **not** the maximum age of displayed data. Check the footnote or `/health` when freshness matters. This availability policy intentionally replaces the earlier strict 15-minute cutoff.
 

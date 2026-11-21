@@ -53,7 +53,7 @@ export function normalize({ instances, included }, { from, to, timezone }) {
     const tags = (instance.relationships?.tags?.data || []).map((ref) => lookup(ref, included, 'Tag'))
       .filter(Boolean).map((tag) => ({ id: String(tag.id), name: plainText(tag.attributes?.name, 100) }));
     events.set(String(instance.id), {
-      id: String(instance.id), title,
+      id: String(instance.id), eventId: String(event.id), title,
       start: new Date(start).toISOString(), end: new Date(end).toISOString(),
       allDay: a.all_day_event,
       // End dates are exclusive for all-day schedules; make the display date inclusive.

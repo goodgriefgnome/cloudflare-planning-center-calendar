@@ -91,3 +91,58 @@ test('date button keeps the list mounted and jumps to the next available day', (
   view.onClick({ target: { closest: () => button } });
   assert.equal(updates, 1); assert.equal(destination, sections[1]);
 });
+
+function rows(view) {
+  return view.renderList().children.filter((node) => node.dataset.month).flatMap((month) =>
+    month.children.filter((node) => node.dataset.date).flatMap((day) => day.children.filter((node) => node.className === 'event')));
+}
+function descriptions(view) {
+  return rows(view).map((row) => row.children.filter((node) => node.attributes.part === 'description').map((node) => node.textContent));
+}
+
+test('descriptions are inline only on the first displayed occurrence of each parent event', (t) => {
+  t.mock.method(Date, 'now', () => now);
+  const view = component();
+  view.snapshot.events = [
+    { ...event('expired', '2026-11-20'), eventId: 'series', description: 'Join us for a meal.' },
+    { ...event('first', '2026-11-22'), eventId: 'series', description: 'Join us for a meal.' },
+    { ...event('second', '2026-12-06'), eventId: 'series', description: 'Join us for a meal.' },
+    { ...event('unrelated', '2026-12-07'), eventId: 'other', title: 'first', description: 'Join us for a meal.' },
+  ];
+  assert.deepEqual(descriptions(view), [['Join us for a meal.'], [], ['Join us for a meal.']]);
+  view.selectedMonth = '2026-12';
+  assert.deepEqual(descriptions(view), [['Join us for a meal.'], [], ['Join us for a meal.']]);
+  t.mock.method(Date, 'now', () => Date.parse('2026-11-23T00:00:00Z'));
+  view.today = '2026-11-23';
+  assert.deepEqual(descriptions(view), [['Join us for a meal.'], ['Join us for a meal.']]);
+});
+
+test('ordinary titles remain plain and descriptions use text content with preserved line breaks', (t) => {
+  t.mock.method(Date, 'now', () => now);
+  const view = component();
+  const description = 'Everyone welcome.\n\n<script>example</script>';
+  view.snapshot.events = [{ ...event('one-off', '2026-11-22'), description }];
+  const [row] = rows(view);
+  assert.equal(row.children[0].className, 'event-title');
+  assert.deepEqual(row.children[0].attributes, { part: 'event-title' });
+  assert.equal(row.children.at(-1).textContent, description);
+  assert.equal(row.children.at(-1).innerHTML, undefined);
+});
+
+test('missing series IDs in older cached snapshots do not merge unrelated descriptions', (t) => {
+  t.mock.method(Date, 'now', () => now);
+  const view = component();
+  view.snapshot.events = [event('one', '2026-11-22'), event('two', '2026-11-23')].map((item) =>
+    ({ ...item, title: 'Same title', description: 'Same useful description.' }));
+  assert.deepEqual(descriptions(view), [['Same useful description.'], ['Same useful description.']]);
+});
+
+test('duplicate title descriptions stay hidden and a later instance does not acquire the description', (t) => {
+  t.mock.method(Date, 'now', () => now);
+  const view = component();
+  view.snapshot.events = [
+    { ...event('first', '2026-11-22'), eventId: 'series', description: 'first' },
+    { ...event('second', '2026-11-23'), eventId: 'series', description: 'Later information.' },
+  ];
+  assert.deepEqual(descriptions(view), [[], []]);
+});
