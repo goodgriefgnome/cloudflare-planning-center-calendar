@@ -4,6 +4,7 @@ import { fetchInstances, UpstreamError } from './pco.js';
 import { normalize } from './normalize.js';
 import { hasSnapshot, needsRefresh, REFRESH_INTERVAL_MS } from './freshness.js';
 import { CalendarError, diagnosticCode } from './errors.js';
+import { errorInfo, logDiagnostic } from './diagnostics.js';
 
 export const SNAPSHOT_KEY = 'public-snapshot-v1';
 
@@ -23,11 +24,17 @@ function cacheState(env) {
 
 async function readSnapshot(env) {
   const state = cacheState(env);
+  const started = Date.now();
   try {
     const stored = await env.CALENDAR.get(SNAPSHOT_KEY, 'json');
     const time = (s) => Date.parse(s?.fetchedAt || s?.generatedAt);
     if (hasSnapshot(stored) && (!hasSnapshot(state.snapshot) || time(stored) > time(state.snapshot))) state.snapshot = stored;
-  } catch {
+    logDiagnostic(env, { action: 'cache', phase: 'read', key: SNAPSHOT_KEY, kvPresent: stored !== null,
+      kvValid: hasSnapshot(stored), memoryAvailable: hasSnapshot(state.snapshot),
+      fetchedAt: state.snapshot?.fetchedAt || state.snapshot?.generatedAt || null, durationMs: Date.now() - started });
+  } catch (error) {
+    logDiagnostic(env, { action: 'cache', phase: 'read_error', key: SNAPSHOT_KEY,
+      memoryAvailable: hasSnapshot(state.snapshot), durationMs: Date.now() - started, error: errorInfo(error) }, 'error');
     if (!hasSnapshot(state.snapshot)) throw new CalendarError('KV_READ_FAILED');
   }
   return state.snapshot;
@@ -36,13 +43,22 @@ async function readSnapshot(env) {
 function startRefresh(env, options) {
   const clock = options.clock || Date.now;
   const state = cacheState(env);
-  if (state.pending) return state.pending;
-  if (clock() < state.retryAt) return null;
+  if (state.pending) {
+    logDiagnostic(env, { action: 'cache', phase: 'refresh_join', snapshotAvailable: hasSnapshot(state.snapshot) });
+    return state.pending;
+  }
+  if (clock() < state.retryAt) {
+    logDiagnostic(env, { action: 'cache', phase: 'refresh_backoff', retryAt: new Date(state.retryAt).toISOString(),
+      retryInMs: state.retryAt - clock(), snapshotAvailable: hasSnapshot(state.snapshot) });
+    return null;
+  }
   const pending = sync(env, options).then((result) => {
     state.retryAt = 0;
     return result;
   }).catch((error) => {
     state.retryAt = clock() + 30_000;
+    logDiagnostic(env, { action: 'cache', phase: 'refresh_failed', code: diagnosticCode(error),
+      retryAt: new Date(state.retryAt).toISOString(), snapshotAvailable: hasSnapshot(state.snapshot) }, 'error');
     throw error;
   }).finally(() => { if (state.pending === pending) state.pending = null; });
   state.pending = pending;
@@ -66,6 +82,7 @@ export async function getSnapshot(env, options = {}) {
     return { snapshot, refreshing: false };
   }
   // Only a cache with no successful snapshot ever needs to wait for upstream.
+  logDiagnostic(env, { action: 'cache', phase: 'cold_start', snapshotAvailable: false });
   const pending = startRefresh(env, options);
   if (!pending) throw new CalendarError('CALENDAR_UNAVAILABLE');
   return { snapshot: await pending, refreshing: false };
@@ -74,26 +91,34 @@ export async function getSnapshot(env, options = {}) {
 export async function sync(env, options = {}) {
   const started = Date.now();
   const now = options.now || new Date(options.clock ? options.clock() : Date.now());
+  const syncId = crypto.randomUUID();
+  const log = (phase, fields = {}, level = 'log') => logDiagnostic(env, { action: 'sync', syncId, phase, ...fields }, level);
   let stage = 'CONFIG_INVALID';
+  log('start', { applicationIdPresent: !!env.PCO_APPLICATION_ID, secretPresent: !!env.PCO_SECRET, kvBindingPresent: !!env.CALENDAR });
   try {
     const { timezone } = config(env);
     const window = windowBounds(now);
     stage = 'PCO_FETCH_FAILED';
-    const source = await fetchInstances(env, window.from, window.to, options);
+    log('fetch', { timezone, window, apiVersion: env.PCO_API_VERSION || '2026-06-22' });
+    const source = await fetchInstances(env, window.from, window.to, { ...options, syncId });
     stage = 'EVENT_DATA_INVALID';
+    log('normalize', { instances: source.instances.length, included: source.included.size, pages: source.pages });
     const { events, skipped } = normalize(source, { ...window, timezone });
     // Only one write, after every page succeeded. Never store raw upstream data.
     const fetchedAt = new Date(options.clock ? options.clock() : Date.now()).toISOString();
     const snapshot = { schemaVersion: 1, demo: false, generatedAt: now.toISOString(), fetchedAt, timezone, window, events };
     stage = 'KV_WRITE_FAILED';
-    await env.CALENDAR.put(SNAPSHOT_KEY, JSON.stringify(snapshot));
+    const serialized = JSON.stringify(snapshot);
+    log('kv_write', { key: SNAPSHOT_KEY, bytes: new TextEncoder().encode(serialized).byteLength, events: events.length, skipped });
+    await env.CALENDAR.put(SNAPSHOT_KEY, serialized);
     cacheState(env).snapshot = snapshot;
-    console.log(JSON.stringify({ action: 'sync', ok: true, events: events.length, skipped, pages: source.pages, durationMs: Date.now() - started }));
+    log('complete', { ok: true, events: events.length, skipped, pages: source.pages, fetchedAt, durationMs: Date.now() - started });
     return snapshot;
   } catch (error) {
     // Do not log request headers, credentials, upstream response bodies, or event data.
     const code = diagnosticCode(error, stage);
-    console.error({ action: 'sync', ok: false, status: error instanceof UpstreamError ? error.status : null, code, durationMs: Date.now() - started });
+    log('failed', { ok: false, stage, status: error instanceof UpstreamError ? error.status : null,
+      code, error: errorInfo(error), durationMs: Date.now() - started }, 'error');
     throw new CalendarError(code);
   }
 }
@@ -137,6 +162,8 @@ export async function handleFetch(request, env, options = {}) {
     try { result = demo ? { snapshot: demoSnapshot(settings.timezone), refreshing: false } : await getSnapshot(env, options); }
     catch (error) {
       headers.set('Retry-After', '30');
+      logDiagnostic(env, { action: 'request', phase: 'unavailable', endpoint: url.pathname, status: 503,
+        code: diagnosticCode(error), error: errorInfo(error) }, 'error');
       return json({ error: 'Calendar temporarily unavailable', code: diagnosticCode(error), fallbackUrl: settings.fallbackUrl }, 503);
     }
     const { snapshot, refreshing } = result;
@@ -169,7 +196,7 @@ export default {
     try { return await handleFetch(request, env, { waitUntil: (promise) => ctx.waitUntil(promise) }); }
     catch (error) {
       const code = diagnosticCode(error, 'CONFIG_INVALID');
-      console.error({ action: 'request', ok: false, code });
+      logDiagnostic(env, { action: 'request', phase: 'failed', ok: false, code, error: errorInfo(error) }, 'error');
       return Response.json({ error: 'Calendar configuration or storage unavailable', code }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
     }
   },

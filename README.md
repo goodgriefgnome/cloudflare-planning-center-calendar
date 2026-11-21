@@ -216,7 +216,7 @@ A successful snapshot has no age-based expiry. Requests serve it immediately eve
 
 A refresh follows every page (`per_page=100`), deduplicates instances, filters, and replaces the entire snapshot with one KV write. Its `generatedAt` records the fetch start and `fetchedAt` records the completed fetch and normalisation. Failed pages, validation/normalisation failures, and failed writes never intentionally replace or delete the last good snapshot. This includes authentication and permission errors (`401`/`403`). Newly hidden, cancelled, or deleted events disappear after a **successful** refresh, rather than immediately during an outage.
 
-Page cycles, more than 200 pages, or a two-minute fetch budget abort the refresh. Planning Center `429` responses respect `Retry-After`; pagination uses returned rate-limit headers, and transient errors have bounded retries. Upstream fetches have timeouts and reject redirects/foreign pagination origins. Background failures are logged using safe codes; they do not turn a cached response into HTTP 503.
+Page cycles, more than 200 pages, or a two-minute fetch budget abort the refresh. Planning Center `429` responses respect `Retry-After`; pagination uses returned rate-limit headers, and transient errors have bounded retries. Upstream fetches have timeouts and reject redirects/foreign pagination origins. Background failures are logged with diagnostic codes, stages and exception details; they do not turn a cached response into HTTP 503.
 
 Concurrent requests within one Worker isolate share an in-flight refresh. Each isolate retains its latest successful snapshot so an older KV replica cannot replace it and a temporary KV read outage need not blank that instance. A failed refresh sets a 30-second retry backoff in that isolate. KV has no global lock: simultaneous visitors in different isolates can still cause duplicate read-only refreshes. For global deduplication at higher traffic, introduce a Durable Object coordinator.
 
@@ -228,8 +228,22 @@ CORS allows configured browser origins; it is **not authentication**. Anyone can
 
 ### Operations
 
-- When no cache exists, the embed and `/api/events` show a short diagnostic code on failure. With a cache, failures are logged and the snapshot remains available. `PCO_CREDENTIALS_MISSING` means one or both runtime secrets are absent; `PCO_HTTP_401` means Planning Center rejected authentication; `PCO_HTTP_403` means Planning Center denied the request; `PCO_HTTP_400` means it rejected the API query. `PCO_FETCH_FAILED` indicates a transport/fetch failure, `PCO_RESPONSE_INVALID` an unexpected response, and `KV_READ_FAILED`/`KV_WRITE_FAILED` a storage failure. Codes never include credentials, raw exception text, or upstream response bodies. Failure logs also include the code as a structured object rather than an embedded JSON string.
+- When no cache exists, the embed and `/api/events` show a short diagnostic code on failure. With a cache, failures are logged and the snapshot remains available. `PCO_CREDENTIALS_MISSING` means one or both runtime secrets are absent; `PCO_HTTP_401` means Planning Center rejected authentication; `PCO_HTTP_403` means Planning Center denied the request; `PCO_HTTP_400` means it rejected the API query. `PCO_FETCH_FAILED` indicates a transport/fetch failure, `PCO_RESPONSE_INVALID` an unexpected response, and `KV_READ_FAILED`/`KV_WRITE_FAILED` a storage failure. Public API codes never include credentials, raw exception text, or upstream response bodies. Private Worker console logs include structured exception details with credentials redacted.
 - Check `/health` and Worker logs for refresh success, duration, page count, public event count, and skipped records. Logs do not contain event content or API secrets.
+
+### Worker diagnostic logs
+
+In the Cloudflare dashboard, open **Workers & Pages → planning-center-calendar → Observability → Logs** (or **Live logs**). Expand the request's console entries. All records are structured objects with `timestamp`, `action` and `phase`; all records from a refresh and its upstream requests share a `syncId`.
+
+| Action | Recorded information |
+| --- | --- |
+| `cache` | KV key, whether KV contains a valid snapshot, in-memory availability, snapshot fetch time, read duration/errors, cold start, joining an existing refresh, retry backoff and next retry time |
+| `sync` | Credential/binding presence (booleans only), API version, timezone/date window, current stage, input/output/skipped counts, KV payload bytes, completion time and total duration |
+| `pco` | Validated endpoint, numeric pagination offset, page and attempt numbers, timeout/remaining budget, HTTP status, response content type/length, upstream request ID, rate-limit headers, retry delays and pagination totals |
+| `request` | Unavailable responses or uncaught configuration/storage errors |
+
+Failures include exception `name`, `message`, `stack`, optional `code` and nested causes. JSON syntax errors retain their name and stack frames but omit input-bearing messages. Text fields are limited to 8,000 characters. Known API credentials, encoded credentials, Basic/Bearer tokens and URL passwords are redacted. Logs never include request authorization headers, upstream response bodies or event records; pagination URLs are represented by their endpoint and numeric offset rather than arbitrary query values. These details are only in Worker logs; public error responses remain short diagnostic codes.
+
 - Set up an availability alert if desired. Alerting is not provisioned by this repository.
 - Refreshes follow actual calendar usage. Each refresh can make several API calls. Verify Cloudflare KV, Worker request, subrequest, and CPU limits against actual traffic and the chosen plan.
 - There is no cron, alarm, or public admin refresh endpoint. Opening `/api/events` is the ordinary read-and-refresh path; `/health` never refreshes.
