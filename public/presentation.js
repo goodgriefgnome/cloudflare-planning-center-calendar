@@ -22,7 +22,8 @@ export function timeLabel(event, timezone) {
   const start = keyForDate(event.start, timezone), end = keyForDate(event.end, timezone);
   const a = clockParts(event.start, timezone), b = clockParts(event.end, timezone);
   const aFull = a.clock + a.period, bFull = b.clock + b.period;
-  if (Date.parse(event.start) === Date.parse(event.end)) return `at ${aFull}`;
+  const duration = Date.parse(event.end) - Date.parse(event.start);
+  if (duration >= 0 && duration <= 60_000) return `at ${aFull}`;
   if (start === end) {
     // A repeated wall-clock hour during daylight-saving changes is still a range.
     if (aFull === bFull && zoneName(event.start, timezone) !== zoneName(event.end, timezone)) {

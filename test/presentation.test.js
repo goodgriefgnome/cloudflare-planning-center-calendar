@@ -82,3 +82,15 @@ test('descriptions that only repeat a recurring schedule do not open details', (
     assert.equal(additionalDescription({ ...event, description }, zone), '');
   }
 });
+
+
+test('timed events up to one minute use at, with longer durations retaining a range', () => {
+  const start = '2026-11-22T18:00:00+11:00';
+  for (const duration of [0, 30_000, 59_999, 60_000]) {
+    const event = { title: 'Gathering', start, end: new Date(Date.parse(start) + duration).toISOString(), allDay: false };
+    assert.equal(timeLabel(event, zone), 'at 6pm');
+  }
+  assert.equal(timeLabel({ start, end: new Date(Date.parse(start) + 60_001).toISOString(), allDay: false }, zone), '6–6:01pm');
+  assert.equal(eventSubtitle(timed('18:00', '18:01', { recurrence: 'Every Sunday from 6:00pm to 6:01pm' }), zone), 'at 6pm · Every Sunday');
+  assert.equal(timeLabel({ start: '2026-11-22T23:59:00+11:00', end: '2026-11-23T00:00:00+11:00', allDay: false }, zone), 'at 11:59pm');
+});

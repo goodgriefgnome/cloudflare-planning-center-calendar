@@ -186,7 +186,7 @@ The footnote below the calendar shows **Last updated** in the configured calenda
 
 ### Event presentation
 
-The day heading supplies the date. Single-day all-day events have no time subtitle. Timed events use compact labels such as `at 6pm`, `6–7pm`, `9:30–11am`, or `11am–2pm`. Overnight events say `11pm–12am next day`; longer events use `6pm · until 24 Nov, 10am`, or only `until 24 Nov` for all-day events. Crossing into a new year includes the end year.
+The day heading supplies the date. Single-day all-day events have no time subtitle. Timed events lasting one minute or less use `at` with the start time (for example, 6:00–6:01pm becomes `at 6pm`). Longer timed events use compact labels such as `at 6pm`, `6–7pm`, `9:30–11am`, or `11am–2pm`. Overnight events say `11pm–12am next day`; longer events use `6pm · until 24 Nov, 10am`, or only `until 24 Nov` for all-day events. Crossing into a new year includes the end year.
 
 Genuine recurrence patterns share the subtitle, for example `10–11am · Every other Tuesday` or `11:30am–2pm · Second Sunday of each month`. The original recurrence start date and duplicate schedule prose/times are omitted. One-off API descriptions such as `Sunday, November 29, 2026 from start of day to end of day` are not treated as recurrence patterns.
 
