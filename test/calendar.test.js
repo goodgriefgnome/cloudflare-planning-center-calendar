@@ -266,7 +266,7 @@ test('time spent fetching upstream pages counts toward the snapshot age', async 
   await assert.rejects(getFreshSnapshot(environment(), {
     clock: () => time,
     fetcher: async () => { time += 900_000; return page([]); },
-  }), /Refresh has already expired/);
+  }), /SNAPSHOT_EXPIRED/);
 });
 
 test('deployment has no cron schedule or scheduled handler', () => {
@@ -293,4 +293,33 @@ test('asset responses permit cross-origin modules and restrict framing of standa
 
 test('configuration rejects wildcard origins', () => {
   assert.throws(() => config({ ALLOWED_ORIGINS: '*' }));
+});
+
+test('diagnostics distinguish missing credentials, upstream HTTP errors and KV failures', async () => {
+  const request = new Request('https://calendar.example.org/api/events');
+  const missing = await handleFetch(request, { ...environment(), PCO_APPLICATION_ID: '' });
+  assert.equal((await missing.json()).code, 'PCO_CREDENTIALS_MISSING');
+  const upstream = await handleFetch(request, environment(), { fetcher: async () => new Response('private upstream body', { status: 400 }) });
+  const upstreamData = await upstream.json();
+  assert.equal(upstreamData.code, 'PCO_HTTP_400');
+  assert.ok(!JSON.stringify(upstreamData).includes('private upstream body'));
+  const missingKV = await handleFetch(request, { ...environment(), CALENDAR: undefined });
+  assert.equal((await missingKV.json()).code, 'CALENDAR_BINDING_MISSING');
+  const readEnv = environment();
+  readEnv.CALENDAR.get = async () => { throw new Error('private exception text'); };
+  const read = await handleFetch(request, readEnv);
+  assert.equal((await read.json()).code, 'KV_READ_FAILED');
+  const writeEnv = environment();
+  writeEnv.CALENDAR.put = async () => { throw new Error('private exception text'); };
+  const write = await handleFetch(request, writeEnv, { fetcher: async () => page([]) });
+  assert.equal((await write.json()).code, 'KV_WRITE_FAILED');
+});
+
+test('diagnostics never expose raw network errors or arbitrary error codes', async () => {
+  const request = new Request('https://calendar.example.org/api/events');
+  const error = new Error('test-secret in URL or transport error'); error.code = 'test-secret';
+  const response = await handleFetch(request, environment(), { fetcher: async () => { throw error; } });
+  const body = await response.text();
+  assert.equal(JSON.parse(body).code, 'PCO_FETCH_FAILED');
+  assert.ok(!body.includes('test-secret'));
 });

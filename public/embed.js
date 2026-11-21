@@ -151,6 +151,7 @@ export class ChurchCalendar extends HTMLElement {
     const controller = new AbortController(); this.controller = controller;
     if (!this.hasFreshSnapshot()) this.clearSnapshot();
     const started = performance.now(), wallStarted = Date.now();
+    let failureCode;
     try {
       const endpoint = new URL(this.getAttribute('api-url') || DEFAULT_API, document.baseURI);
       if (!['https:', 'http:'].includes(endpoint.protocol)) throw new Error('Invalid API URL');
@@ -158,6 +159,7 @@ export class ChurchCalendar extends HTMLElement {
       const data = await response.json();
       if (controller.signal.aborted || !this.isConnected || document.hidden) return;
       this.fallbackUrl = httpsUrl(data.fallbackUrl);
+      if (typeof data.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(data.code)) failureCode = data.code;
       if (!response.ok || data.schemaVersion !== 1 || !Array.isArray(data.events)) throw new Error('Events unavailable');
       const lifetime = displayLifetime(data.freshForMs, Math.max(performance.now() - started, Date.now() - wallStarted));
       if (lifetime <= 0) throw new Error('Snapshot expired in transit');
@@ -187,7 +189,7 @@ export class ChurchCalendar extends HTMLElement {
     } catch (error) {
       if (controller.signal.aborted || !this.isConnected) return;
       this.clearSnapshot();
-      this.showStatus('The calendar is temporarily unavailable. Please try again shortly.', true);
+      this.showStatus(`The calendar is temporarily unavailable. Please try again shortly.${failureCode ? ` (${failureCode})` : ''}`, true);
       this.retryTimer = setTimeout(() => { if (!document.hidden) this.load(); }, 30_000);
     } finally {
       if (this.controller === controller) this.loading = false;

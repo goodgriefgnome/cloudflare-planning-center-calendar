@@ -3,6 +3,7 @@ import { demoSnapshot } from './demo.js';
 import { fetchInstances, UpstreamError } from './pco.js';
 import { normalize } from './normalize.js';
 import { remainingFreshness } from './freshness.js';
+import { CalendarError, diagnosticCode } from './errors.js';
 
 export const SNAPSHOT_KEY = 'public-snapshot-v1';
 
@@ -10,14 +11,20 @@ export const SNAPSHOT_KEY = 'public-snapshot-v1';
 // in different isolates can occasionally perform duplicate (safe, read-only) refreshes.
 const refreshes = new WeakMap();
 
+async function readSnapshot(env) {
+  if (!env.CALENDAR) throw new CalendarError('CALENDAR_BINDING_MISSING');
+  try { return await env.CALENDAR.get(SNAPSHOT_KEY, 'json'); }
+  catch { throw new CalendarError('KV_READ_FAILED'); }
+}
+
 export async function getFreshSnapshot(env, options = {}) {
   const clock = options.clock || Date.now;
-  const snapshot = await env.CALENDAR.get(SNAPSHOT_KEY, 'json');
+  const snapshot = await readSnapshot(env);
   if (remainingFreshness(snapshot, clock()) > 1000) return snapshot;
   const existing = refreshes.get(env.CALENDAR);
   if (existing) return existing;
   const pending = sync(env, options).then((result) => {
-    if (remainingFreshness(result, clock()) <= 0) throw new Error('Refresh has already expired');
+    if (remainingFreshness(result, clock()) <= 0) throw new CalendarError('SNAPSHOT_EXPIRED');
     return result;
   });
   refreshes.set(env.CALENDAR, pending);
@@ -28,23 +35,29 @@ export async function getFreshSnapshot(env, options = {}) {
 export async function sync(env, options = {}) {
   const started = Date.now();
   const now = options.now || new Date(options.clock ? options.clock() : Date.now());
+  let stage = 'CONFIG_INVALID';
   try {
     const { timezone } = config(env);
     const window = windowBounds(now);
+    stage = 'PCO_FETCH_FAILED';
     const source = await fetchInstances(env, window.from, window.to, options);
+    stage = 'EVENT_DATA_INVALID';
     const { events, skipped } = normalize(source, { ...window, timezone });
     // Only one write, after every page succeeded. Never store raw upstream data.
     const snapshot = { schemaVersion: 1, demo: false, generatedAt: now.toISOString(), timezone, window, events };
+    stage = 'KV_WRITE_FAILED';
     await env.CALENDAR.put(SNAPSHOT_KEY, JSON.stringify(snapshot));
     console.log(JSON.stringify({ action: 'sync', ok: true, events: events.length, skipped, pages: source.pages, durationMs: Date.now() - started }));
     return snapshot;
   } catch (error) {
     if (error instanceof UpstreamError && [401, 403].includes(error.status)) {
-      await env.CALENDAR.delete(SNAPSHOT_KEY);
+      try { await env.CALENDAR.delete(SNAPSHOT_KEY); }
+      catch { stage = 'KV_WRITE_FAILED'; }
     }
     // Do not log request headers, credentials, upstream response bodies, or event data.
-    console.error(JSON.stringify({ action: 'sync', ok: false, status: error instanceof UpstreamError ? error.status : null, durationMs: Date.now() - started }));
-    throw error;
+    const code = diagnosticCode(error, stage);
+    console.error({ action: 'sync', ok: false, status: error instanceof UpstreamError ? error.status : null, code, durationMs: Date.now() - started });
+    throw new CalendarError(code);
   }
 }
 
@@ -79,18 +92,18 @@ export async function handleFetch(request, env, options = {}) {
     const demo = env.DEMO_MODE === 'true';
     if (url.pathname === '/health') {
       // Monitoring must not create Planning Center traffic.
-      const snapshot = demo ? demoSnapshot(settings.timezone) : await env.CALENDAR.get(SNAPSHOT_KEY, 'json');
+      const snapshot = demo ? demoSnapshot(settings.timezone) : await readSnapshot(env);
       const available = remainingFreshness(snapshot) > 0;
       return json({ available, demo, generatedAt: snapshot?.generatedAt || null }, available ? 200 : 503);
     }
     let snapshot;
     try { snapshot = demo ? demoSnapshot(settings.timezone) : await getFreshSnapshot(env, options); }
-    catch {
+    catch (error) {
       headers.set('Retry-After', '30');
-      return json({ error: 'Calendar temporarily unavailable', fallbackUrl: settings.fallbackUrl }, 503);
+      return json({ error: 'Calendar temporarily unavailable', code: diagnosticCode(error), fallbackUrl: settings.fallbackUrl }, 503);
     }
     const freshForMs = remainingFreshness(snapshot);
-    if (freshForMs <= 0) return json({ error: 'Calendar temporarily unavailable', fallbackUrl: settings.fallbackUrl }, 503);
+    if (freshForMs <= 0) return json({ error: 'Calendar temporarily unavailable', code: 'SNAPSHOT_EXPIRED', fallbackUrl: settings.fallbackUrl }, 503);
     // Reuse KV, not browser/CDN responses. Every response carries its remaining
     // lifetime so a page left open also removes the data at the deadline.
     headers.set('Cache-Control', 'no-store');
@@ -117,8 +130,10 @@ export async function handleFetch(request, env, options = {}) {
 export default {
   async fetch(request, env) {
     try { return await handleFetch(request, env); }
-    catch {
-      return Response.json({ error: 'Calendar configuration or storage unavailable' }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
+    catch (error) {
+      const code = diagnosticCode(error, 'CONFIG_INVALID');
+      console.error({ action: 'request', ok: false, code });
+      return Response.json({ error: 'Calendar configuration or storage unavailable', code }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
     }
   },
 };

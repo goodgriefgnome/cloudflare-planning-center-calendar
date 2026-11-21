@@ -206,6 +206,7 @@ CORS allows configured browser origins; it is **not authentication**. Anyone can
 
 ### Operations
 
+- On failure, the embed and `/api/events` show a short diagnostic code. `PCO_CREDENTIALS_MISSING` means one or both runtime secrets are absent; `PCO_HTTP_401` means Planning Center rejected authentication; `PCO_HTTP_403` means Planning Center denied the request; `PCO_HTTP_400` means it rejected the API query. `PCO_FETCH_FAILED` indicates a transport/fetch failure, `PCO_RESPONSE_INVALID` an unexpected response, and `KV_READ_FAILED`/`KV_WRITE_FAILED` a storage failure. Codes never include credentials, raw exception text, or upstream response bodies. Failure logs also include the code as a structured object rather than an embedded JSON string.
 - Check `/health` and Worker logs for refresh success, duration, page count, public event count, and skipped records. Logs do not contain event content or API secrets.
 - Set up an availability alert if desired. Alerting is not provisioned by this repository.
 - Refreshes follow actual calendar usage. Each refresh can make several API calls. Verify Cloudflare KV, Worker request, subrequest, and CPU limits against actual traffic and the chosen plan.

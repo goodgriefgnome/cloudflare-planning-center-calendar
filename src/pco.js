@@ -1,8 +1,10 @@
+import { CalendarError } from './errors.js';
+
 const ROOT = 'https://api.planningcenteronline.com';
 
-export class UpstreamError extends Error {
+export class UpstreamError extends CalendarError {
   constructor(status) {
-    super(`Planning Center request failed (${status})`);
+    super(`PCO_HTTP_${status}`);
     this.status = status;
   }
 }
@@ -35,7 +37,7 @@ export async function fetchInstances(env, from, to, {
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   clock = Date.now,
 } = {}) {
-  if (!env.PCO_APPLICATION_ID || !env.PCO_SECRET) throw new Error('Planning Center secrets are missing');
+  if (!env.PCO_APPLICATION_ID || !env.PCO_SECRET) throw new CalendarError('PCO_CREDENTIALS_MISSING');
   const deadline = clock() + 120_000;
   const headers = {
     Authorization: `Basic ${btoa(`${env.PCO_APPLICATION_ID}:${env.PCO_SECRET}`)}`,
@@ -65,8 +67,10 @@ export async function fetchInstances(env, from, to, {
       await response.body?.cancel();
       await sleep(delay);
     }
-    const page = await response.json();
-    if (!Array.isArray(page.data) || (page.included && !Array.isArray(page.included))) throw new Error('Invalid Planning Center response');
+    let page;
+    try { page = await response.json(); }
+    catch { throw new CalendarError('PCO_RESPONSE_INVALID'); }
+    if (!Array.isArray(page.data) || (page.included && !Array.isArray(page.included))) throw new CalendarError('PCO_RESPONSE_INVALID');
     instances.push(...page.data);
     for (const resource of page.included || []) included.set(`${resource.type}:${resource.id}`, resource);
     next = page.links?.next || null;
