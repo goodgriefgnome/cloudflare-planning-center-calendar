@@ -10,9 +10,12 @@ The calendar has a month navigator and a continuous list grouped by month and da
 Visitors:
   Your website → embed.js → <church-calendar> → Worker /api/events → KV
 
-If the snapshot is missing or approaching 15 minutes old:
-  The request waits → Planning Center → publication filter → complete snapshot in KV
-  The visitor receives the newly fetched snapshot (never the expired one)
+When a snapshot is at least 15 minutes old:
+  Serve that cached snapshot immediately
+  Worker waitUntil → Planning Center → publication filter → replace KV only on success
+
+Only when no successful snapshot exists:
+  The first request waits for Planning Center
 ```
 
 One deployment connects to **one Planning Center organisation**. The default date window is the next calendar year, including events currently in progress. Individual occurrences come from Planning Center; the embed does not generate recurrence rules itself.
@@ -36,11 +39,11 @@ npm test
 npm run build
 ```
 
-`build` bundles a deployment with Wrangler's dry-run mode; it does not publish anything. Tests cover publication rules, public schedules, cancellations, restricted resources, pagination, auth failures, snapshot replacement, stale-data expiry, CORS, daylight saving, and all-day dates. CI runs these checks on pushes and pull requests.
+`build` bundles a deployment with Wrangler's dry-run mode; it does not publish anything. Tests cover publication rules, public schedules, cancellations, restricted resources, pagination, auth failures, snapshot replacement, stale-cache retention, CORS, daylight saving, and all-day dates. CI runs these checks on pushes and pull requests.
 
 The suite also runs the Planning Center client inside Cloudflare's local Workers runtime (Miniflare/workerd), with outbound requests intercepted. This checks runtime-specific fetch options and verifies that redirects are rejected without forwarding credentials. It needs no real API credentials or external requests.
 
-Automated checks cover the request-driven refresh and strict 15-minute server/browser expiry, in addition to publication and API behaviour. The Wrangler deployment dry run is also checked. Browser QA is still pending because the development environment's preview relay timed out. Before launch, check desktop and mobile layouts, keyboard/focus behaviour in the details dialog, and a cross-origin embed on the actual website, then compare events against your real Planning Center account.
+Automated checks cover request-driven background refresh, retention after failures, snapshot timestamps, publication, and API behaviour. The Wrangler deployment dry run is also checked. Browser QA is still pending because the development environment's preview relay timed out. Before launch, check desktop and mobile layouts, keyboard/focus behaviour in the details dialog, and a cross-origin embed on the actual website, then compare events against your real Planning Center account.
 
 ## Deploy to your own Cloudflare account
 
@@ -62,10 +65,10 @@ Edit `wrangler.jsonc`:
 | `name` | Your Worker name |
 | `TIMEZONE` | Source calendar timezone; default `Australia/Sydney` |
 | `ALLOWED_ORIGINS` | Comma-separated exact origins permitted to call the API from a browser; no wildcard or trailing slash |
-| `FALLBACK_URL` | Public Church Center calendar link shown if the API reports an outage |
+| `FALLBACK_URL` | Legacy API metadata; the component no longer displays a Church Center link |
 | `PCO_USER_AGENT` | Identifies the application and supplies a contact URL/email |
 | `PCO_API_VERSION` | Pinned to stable `2026-06-22`; the linked `2026-10-19` documentation was beta when this was written |
-| Snapshot age | Hard limit of 15 minutes in code; expired data is never a fallback |
+| Refresh threshold | 15 minutes; older successful snapshots remain available with no age cutoff |
 | `DEMO_MODE` | Keep `false` in production |
 | `triggers.crons` | Empty: no scheduled refreshes |
 
@@ -101,9 +104,9 @@ npm run deploy
 npx wrangler tail
 ```
 
-Open the calendar or `/api/events` to trigger the first refresh. A cold start waits for Planning Center before displaying results. Subsequent visitors reuse the snapshot until it approaches 15 minutes old; the first visitor after expiry waits for a complete replacement. If that refresh fails, the calendar shows an unavailable message rather than an old snapshot.
+Open the calendar or `/api/events` to trigger the first refresh. A cold start waits for Planning Center before displaying results. Thereafter, visits serve the last successful snapshot immediately. Once it is at least 15 minutes old, a visit also starts a refresh in the background using `ctx.waitUntil()`. A failed refresh leaves the existing snapshot and its timestamp unchanged.
 
-`/health` reports whether KV currently contains a fresh snapshot. It does **not** fetch events, so health monitoring does not create upstream traffic. Before the first real calendar visit, or after a quiet period exceeding 15 minutes, `/health` can legitimately return HTTP 503. An empty calendar (`events: []`) is a successful result if no public events match.
+`/health` reports whether a usable successful snapshot exists, along with `stale`, `generatedAt`, and `fetchedAt`. It never triggers a refresh. An old snapshot remains healthy/available; the `stale` flag tells you it is due for refresh. Before the first successful fetch, `/health` returns HTTP 503. An empty calendar (`events: []`) is a valid successful snapshot.
 
 ### Moving from the earlier cron version
 
@@ -170,9 +173,11 @@ church-calendar::part(month-heading) { font-family: Georgia, serif; }
 church-calendar::part(dialog) { max-width: 48rem; }
 ```
 
-Available parts: `calendar`, `layout`, `navigation`, `month-select`, `day`, `list`, `month-heading`, `date-heading`, `event`, `event-title`, `event-time`, `dialog`, `dialog-content`, `dialog-title`, `dialog-image`, `description`, `close-button`, `registration-link`.
+Available parts: `calendar`, `layout`, `navigation`, `month-select`, `day`, `list`, `month-heading`, `date-heading`, `event`, `event-title`, `event-time`, `dialog`, `dialog-content`, `dialog-title`, `dialog-image`, `description`, `close-button`, `registration-link`, `last-updated`.
 
-The navigation stacks above the list when the **component's container** is narrow, even on a wide desktop. Month changes show that month and all later events in the window. Selecting a day jumps to the next listed event on or after it. The details dialog uses the host webpage's top layer, supports Escape/backdrop/Close, and restores focus. Registration and Church Center links open in new tabs. An iframe remains possible, but any dialog inside it is confined to the iframe viewport.
+The navigation stacks above the list when the **component's container** is narrow, even on a wide desktop. Month changes show that month and all later events in the window. Selecting a day jumps to the next listed event on or after it. The details dialog uses the host webpage's top layer, supports Escape/backdrop/Close, and restores focus. Registration links open in new tabs. Event details contain no Church Center link. An iframe remains possible, but any dialog inside it is confined to the iframe viewport.
+
+The footnote below the calendar shows **Last updated** in the configured calendar timezone. It uses `fetchedAt`, recorded after the complete upstream fetch and normalisation have succeeded; older snapshots fall back to `generatedAt`. It does not advance on a cache read, page load, or failed refresh. Style it with `church-calendar::part(last-updated)`.
 
 ## Publication and privacy rules
 
@@ -192,23 +197,23 @@ All-day schedule ends are treated as exclusive. Before launch, compare a real si
 
 ### Refresh and failure behaviour
 
-Each request first checks the original timestamp of the stored snapshot. Data older than 15 minutes, future-dated data, and invalid timestamps are never served. Missing/expired snapshots trigger a blocking refresh; there is no stale-while-revalidate path and no 45-minute fallback. A refresh can start up to one second early to leave time for delivery to the browser. The timestamp is taken at the **start** of the upstream fetch so time spent collecting pages counts toward the age limit.
+A successful snapshot has no age-based expiry. Requests serve it immediately even if it is days old. When it is at least 15 minutes old, a visit starts a refresh in the background and retains that work with `ctx.waitUntil()`. Only a missing/malformed snapshot makes a visitor wait for upstream. If that initial fetch fails, the unavailable state is still necessary because no successful data exists yet.
 
-A refresh follows every page (`per_page=100`), deduplicates instances, filters, and replaces the entire snapshot with one KV write. This removes deleted/newly hidden/cancelled events without keeping tombstones. A failed page never publishes a partial snapshot. Page cycles, more than 200 pages, or a two-minute sync budget abort the refresh; larger organisations should use a partitioned sync architecture rather than silently truncating data.
+A refresh follows every page (`per_page=100`), deduplicates instances, filters, and replaces the entire snapshot with one KV write. Its `generatedAt` records the fetch start and `fetchedAt` records the completed fetch and normalisation. Failed pages, validation/normalisation failures, and failed writes never intentionally replace or delete the last good snapshot. This includes authentication and permission errors (`401`/`403`). Newly hidden, cancelled, or deleted events disappear after a **successful** refresh, rather than immediately during an outage.
 
-Planning Center `429` responses respect `Retry-After`. Pagination pacing uses the returned rate-limit headers, and transient server errors have bounded retries. Upstream fetches have timeouts and refuse redirects/foreign pagination origins, preventing credential forwarding. A detected `401`/`403` deletes the stored snapshot. Other failed refreshes can leave the previous snapshot in storage, but it is never returned after its 15-minute deadline.
+Page cycles, more than 200 pages, or a two-minute fetch budget abort the refresh. Planning Center `429` responses respect `Retry-After`; pagination uses returned rate-limit headers, and transient errors have bounded retries. Upstream fetches have timeouts and reject redirects/foreign pagination origins. Background failures are logged using safe codes; they do not turn a cached response into HTTP 503.
 
-Concurrent requests within one Worker isolate share an in-flight refresh. KV has no global lock: simultaneous visitors in different isolates or KV propagation delays can cause duplicate read-only refreshes. That is an intentional simplicity tradeoff for a low-traffic calendar, not a globally enforced API-call interval. Timestamp checks still prevent expired responses; a refresh returns its freshly fetched result directly instead of re-reading a possibly old KV replica. For global request deduplication at higher traffic, introduce a Durable Object coordinator.
+Concurrent requests within one Worker isolate share an in-flight refresh. Each isolate retains its latest successful snapshot so an older KV replica cannot replace it and a temporary KV read outage need not blank that instance. A failed refresh sets a 30-second retry backoff in that isolate. KV has no global lock: simultaneous visitors in different isolates can still cause duplicate read-only refreshes. For global deduplication at higher traffic, introduce a Durable Object coordinator.
 
-API responses use `Cache-Control: no-store`, and the embed bypasses its HTTP cache. Each response includes the snapshot's remaining lifetime. The browser subtracts the full request duration plus a small margin, then clears the list and closes its details dialog at expiry before requesting a replacement. Both monotonic and wall-clock deadlines are checked; expiry is also checked before interactions. Hidden/page-cached views discard their displayed snapshot and recheck on return. Normal browser timers/event handlers enforce this while the page is running; no JavaScript can update a frozen or suspended browser until it resumes.
+API responses use `Cache-Control: no-store` so HTTP caches do not hide an updated KV snapshot. A visible embed checks the API every minute, or after 10 seconds when the response indicates a background refresh. It retains its displayed events, open dialog, and last-updated footnote if a request fails, and retries after 30 seconds. Hidden tabs stop checks and recheck on return without clearing their successful data. A successful response updates the display and footnote. The old `freshForMs` field and `/freshness.js` module are retained for cached older embeds during rollout; current components do not use a display expiry.
 
-There is no background schedule. No visitors (including open visible calendar tabs) means no Planning Center requests. A visible tab fetches again when its displayed snapshot expires so it continues to show fresh data. On failure it shows an unavailable state and retries after 30 seconds while visible; this does not extend a snapshot's lifetime. The 15-minute promise refers to age since the fetch started, not to Planning Center's own internal propagation delay or an atomic point-in-time view across API pages.
+There is no cron or background schedule. No visitors (including open visible calendar tabs) means no Planning Center requests. The 15-minute threshold controls when a refresh is attempted, **not** the maximum age of displayed data. Check the footnote or `/health` when freshness matters. This availability policy intentionally replaces the earlier strict 15-minute cutoff.
 
 CORS allows configured browser origins; it is **not authentication**. Anyone can retrieve this intentionally public snapshot through a non-browser client. Module scripts have wildcard CORS so they can load cross-origin. The standalone page restricts framing to configured origins. No arbitrary upstream proxy, token route, or public admin endpoint is exposed.
 
 ### Operations
 
-- On failure, the embed and `/api/events` show a short diagnostic code. `PCO_CREDENTIALS_MISSING` means one or both runtime secrets are absent; `PCO_HTTP_401` means Planning Center rejected authentication; `PCO_HTTP_403` means Planning Center denied the request; `PCO_HTTP_400` means it rejected the API query. `PCO_FETCH_FAILED` indicates a transport/fetch failure, `PCO_RESPONSE_INVALID` an unexpected response, and `KV_READ_FAILED`/`KV_WRITE_FAILED` a storage failure. Codes never include credentials, raw exception text, or upstream response bodies. Failure logs also include the code as a structured object rather than an embedded JSON string.
+- When no cache exists, the embed and `/api/events` show a short diagnostic code on failure. With a cache, failures are logged and the snapshot remains available. `PCO_CREDENTIALS_MISSING` means one or both runtime secrets are absent; `PCO_HTTP_401` means Planning Center rejected authentication; `PCO_HTTP_403` means Planning Center denied the request; `PCO_HTTP_400` means it rejected the API query. `PCO_FETCH_FAILED` indicates a transport/fetch failure, `PCO_RESPONSE_INVALID` an unexpected response, and `KV_READ_FAILED`/`KV_WRITE_FAILED` a storage failure. Codes never include credentials, raw exception text, or upstream response bodies. Failure logs also include the code as a structured object rather than an embedded JSON string.
 - Check `/health` and Worker logs for refresh success, duration, page count, public event count, and skipped records. Logs do not contain event content or API secrets.
 - Set up an availability alert if desired. Alerting is not provisioned by this repository.
 - Refreshes follow actual calendar usage. Each refresh can make several API calls. Verify Cloudflare KV, Worker request, subrequest, and CPU limits against actual traffic and the chosen plan.

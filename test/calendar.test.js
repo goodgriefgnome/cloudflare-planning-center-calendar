@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { remainingFreshness } from '../src/freshness.js';
+import { hasSnapshot, needsRefresh } from '../src/freshness.js';
 import { config, dateKey, safeUrl, windowBounds } from '../src/config.js';
 import { normalize, plainText } from '../src/normalize.js';
 import { fetchInstances, instanceUrl, UpstreamError } from '../src/pco.js';
-import worker, { getFreshSnapshot, handleFetch, SNAPSHOT_KEY, sync } from '../src/worker.js';
+import worker, { getSnapshot, handleFetch, SNAPSHOT_KEY, sync } from '../src/worker.js';
 import { eventDates, keyForDate, monthDays, monthShift, timeLabel } from '../public/dates.js';
 
 const now = new Date('2026-11-21T00:00:00Z');
@@ -165,14 +165,14 @@ test('sync replaces deleted/hidden events with a complete new snapshot', async (
   assert.deepEqual((await env.CALENDAR.get(SNAPSHOT_KEY, 'json')).events, []);
 });
 
-test('failed second page preserves previous snapshot; auth failure invalidates it', async () => {
+test('failed second page and auth failures preserve the previous complete snapshot', async () => {
   const old = freshSnapshot(); const env = environment(old); let calls = 0;
   await assert.rejects(sync(env, { now, fetcher: async () => {
     calls++; return calls === 1 ? page([], 'https://api.planningcenteronline.com/calendar/v2/event_instances?offset=100') : new Response('', { status: 400 });
   } }));
   assert.deepEqual(await env.CALENDAR.get(SNAPSHOT_KEY, 'json'), old);
   await assert.rejects(sync(env, { now, fetcher: async () => new Response('', { status: 403 }) }));
-  assert.equal(await env.CALENDAR.get(SNAPSHOT_KEY, 'json'), null);
+  assert.deepEqual(await env.CALENDAR.get(SNAPSHOT_KEY, 'json'), old);
 });
 
 test('API allows configured origins and rejects others without permissive CORS', async () => {
@@ -186,29 +186,49 @@ test('API allows configured origins and rejects others without permissive CORS',
   assert.equal(sameOrigin.status, 200);
 });
 
-test('API refreshes expired data before responding and does not cache responses', async () => {
+test('stale cache responds immediately while waitUntil retains the successful refresh', async () => {
   const request = new Request('https://calendar.example.org/api/events');
-  const stale = { ...freshSnapshot(), generatedAt: new Date(Date.now() - 900_000).toISOString() };
-  const env = environment(stale); let calls = 0;
-  const response = await handleFetch(request, env, { fetcher: async () => { calls++; return page([]); } });
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  const stale = { ...freshSnapshot(), generatedAt: new Date(Date.now() - 86400_000).toISOString(), events: [{ title: 'Cached event' }] };
+  const env = environment(stale); let calls = 0, release; const background = [];
+  const gate = new Promise((resolve) => { release = resolve; });
+  const response = await handleFetch(request, env, {
+    fetcher: async () => { calls++; await gate; return page([]); },
+    waitUntil: (promise) => background.push(promise),
+  });
   const data = await response.json();
-  assert.ok(data.freshForMs > 0 && data.freshForMs <= 900_000);
-  assert.notEqual(data.generatedAt, stale.generatedAt);
-  assert.equal(calls, 1);
-  const cached = await handleFetch(request, env, { fetcher: async () => { throw new Error('Unexpected refresh'); } });
-  assert.equal(cached.status, 200);
+  assert.equal(response.status, 200); assert.equal(calls, 1);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  assert.deepEqual(data.events, stale.events);
+  assert.equal(data.generatedAt, stale.generatedAt);
+  assert.equal(data.refreshing, true); assert.equal(data.stale, true);
+  assert.equal(background.length, 1);
+  release(); await Promise.all(background);
+  const next = await handleFetch(request, env, { fetcher: async () => { throw new Error('Unexpected refresh'); } });
+  const updated = await next.json();
+  assert.deepEqual(updated.events, []);
+  assert.ok(updated.fetchedAt); assert.notEqual(updated.generatedAt, stale.generatedAt);
+  assert.equal(updated.refreshing, false);
 });
 
-test('API never serves an expired snapshot on refresh failure', async () => {
-  const env = environment({ ...freshSnapshot(), generatedAt: new Date(Date.now() - 901_000).toISOString(), events: [{ title: 'Expired event' }] });
-  const response = await handleFetch(new Request('https://calendar.example.org/api/events'), env, { fetcher: async () => new Response('', { status: 400 }) });
-  assert.equal(response.status, 503);
-  assert.equal(response.headers.get('Cache-Control'), 'no-store');
-  assert.equal(response.headers.get('Retry-After'), '30');
-  assert.equal((await response.json()).events, undefined);
-});
+for (const status of [400, 401, 403, 503]) {
+  test(`stale snapshot and its timestamp survive an upstream ${status}`, async () => {
+    const stale = { ...freshSnapshot(), generatedAt: new Date(Date.now() - 901_000).toISOString(), events: [{ title: 'Cached event' }] };
+    const env = environment(stale); const background = [];
+    const response = await handleFetch(new Request('https://calendar.example.org/api/events'), env, {
+      fetcher: async () => new Response('', { status }), sleep: async () => {},
+      waitUntil: (promise) => background.push(promise),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).events, stale.events);
+    await Promise.all(background);
+    assert.deepEqual(await env.CALENDAR.get(SNAPSHOT_KEY, 'json'), stale);
+    const again = await handleFetch(new Request('https://calendar.example.org/api/events'), env, {
+      fetcher: async () => { throw new Error('Backoff must suppress repeated upstream calls'); },
+    });
+    assert.equal(again.status, 200);
+    assert.deepEqual((await again.json()).events, stale.events);
+  });
+}
 
 test('cold start waits for a complete refresh', async () => {
   const env = environment(); let calls = 0;
@@ -221,26 +241,38 @@ test('simultaneous visitors in one isolate share one complete refresh', async ()
   const env = environment(); let calls = 0; let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const options = { fetcher: async () => { calls++; await gate; return page([]); } };
-  const requests = Array.from({ length: 12 }, () => getFreshSnapshot(env, options));
+  const requests = Array.from({ length: 12 }, () => getSnapshot(env, options));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls, 1); release();
   const snapshots = await Promise.all(requests);
-  assert.ok(snapshots.every((snapshot) => snapshot === snapshots[0]));
+  assert.ok(snapshots.every((snapshot) => snapshot.snapshot === snapshots[0].snapshot));
 });
 
-test('failed refresh releases the local lock for the next visitor', async () => {
-  const env = environment();
-  await assert.rejects(getFreshSnapshot(env, { fetcher: async () => new Response('', { status: 400 }) }));
-  const snapshot = await getFreshSnapshot(env, { fetcher: async () => page([]) });
-  assert.ok(remainingFreshness(snapshot) > 0);
+test('failed cold refresh retries after the per-isolate backoff', async () => {
+  const env = environment(); let time = now.getTime();
+  await assert.rejects(getSnapshot(env, { clock: () => time, fetcher: async () => new Response('', { status: 400 }) }));
+  await assert.rejects(getSnapshot(env, { clock: () => time, fetcher: async () => { throw new Error('Must not run during backoff'); } }));
+  time += 30_001;
+  const result = await getSnapshot(env, { clock: () => time, fetcher: async () => page([]) });
+  assert.ok(hasSnapshot(result.snapshot));
 });
 
-test('KV propagation cannot cause expired data to be returned after a refresh', async () => {
+test('an older KV replica cannot replace the newer local successful snapshot', async () => {
   const env = environment();
+  await sync(env, { fetcher: async () => page([]) });
   env.CALENDAR.get = async () => ({ ...freshSnapshot(), generatedAt: new Date(Date.now() - 901_000).toISOString(), events: [{ title: 'Old replica' }] });
-  const response = await handleFetch(new Request('https://calendar.example.org/api/events'), env, { fetcher: async () => page([]) });
+  const response = await handleFetch(new Request('https://calendar.example.org/api/events'), env, {
+    fetcher: async () => { throw new Error('No redundant refresh expected'); },
+  });
   assert.equal(response.status, 200);
   assert.deepEqual((await response.json()).events, []);
+});
+
+test('local successful snapshot remains available during a KV read outage', async () => {
+  const env = environment(); await sync(env, { fetcher: async () => page([]) });
+  env.CALENDAR.get = async () => { throw new Error('KV unavailable'); };
+  const response = await handleFetch(new Request('https://calendar.example.org/api/events'), env);
+  assert.equal(response.status, 200); assert.deepEqual((await response.json()).events, []);
 });
 
 test('health checks and preflights do not call Planning Center or refresh', async () => {
@@ -252,21 +284,32 @@ test('health checks and preflights do not call Planning Center or refresh', asyn
   assert.equal(await env.CALENDAR.get(SNAPSHOT_KEY, 'json'), null);
 });
 
-test('freshness expires at exactly 15 minutes and rejects future/invalid timestamps', () => {
-  const timestamp = now.getTime(); const snapshot = { schemaVersion: 1, generatedAt: now.toISOString() };
-  assert.equal(remainingFreshness(snapshot, timestamp), 900_000);
-  assert.equal(remainingFreshness(snapshot, timestamp + 899_999), 1);
-  assert.equal(remainingFreshness(snapshot, timestamp + 900_000), 0);
-  assert.equal(remainingFreshness(snapshot, timestamp - 1), 0);
-  assert.equal(remainingFreshness({ ...snapshot, generatedAt: 'bad' }, timestamp), 0);
+test('15 minutes is a refresh threshold, not a cache expiry', () => {
+  const timestamp = now.getTime(); const snapshot = { schemaVersion: 1, generatedAt: now.toISOString(), events: [] };
+  assert.equal(needsRefresh(snapshot, timestamp + 899_999), false);
+  assert.equal(needsRefresh(snapshot, timestamp + 900_000), true);
+  assert.equal(hasSnapshot(snapshot), true);
+  assert.equal(hasSnapshot({ ...snapshot, generatedAt: 'bad' }), false);
+  assert.equal(needsRefresh({ ...snapshot, fetchedAt: new Date(timestamp + 60000).toISOString() }, timestamp + 900_000), false);
 });
 
-test('time spent fetching upstream pages counts toward the snapshot age', async () => {
+test('last-fetched timestamp records the successful fetch completion', async () => {
   let time = now.getTime();
-  await assert.rejects(getFreshSnapshot(environment(), {
+  const { snapshot } = await getSnapshot(environment(), {
     clock: () => time,
-    fetcher: async () => { time += 900_000; return page([]); },
-  }), /SNAPSHOT_EXPIRED/);
+    fetcher: async () => { time += 20_000; return page([]); },
+  });
+  assert.equal(Date.parse(snapshot.generatedAt), now.getTime());
+  assert.equal(Date.parse(snapshot.fetchedAt), now.getTime() + 20_000);
+});
+
+test('health serves a stale successful snapshot without triggering refresh', async () => {
+  const env = environment({ ...freshSnapshot(), generatedAt: new Date(Date.now() - 86400_000).toISOString() });
+  const response = await handleFetch(new Request('https://calendar.example.org/health'), env, {
+    fetcher: async () => { throw new Error('Health must not refresh'); },
+  });
+  const data = await response.json();
+  assert.equal(response.status, 200); assert.equal(data.available, true); assert.equal(data.stale, true);
 });
 
 test('deployment has no cron schedule or scheduled handler', () => {

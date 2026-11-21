@@ -1,3 +1,5 @@
+// Legacy exports for cached pre-availability-first embeds. The current embed
+// no longer imports this module or expires a displayed successful snapshot.
 const MAX_AGE_MS = 15 * 60 * 1000;
 
 // Subtract the entire request duration (not just the return journey), with a

@@ -1,4 +1,3 @@
-import { deadlinePassed, displayLifetime } from './freshness.js';
 import { eventDates, keyForDate, labelDate, monthDays, monthShift, timeLabel } from './dates.js';
 
 const DEFAULT_API = new URL('/api/events', import.meta.url).href;
@@ -39,6 +38,7 @@ const STYLE = `
   .status { padding:1.5rem; background:var(--calendar-surface,#f4f6f9); border-radius:var(--calendar-border-radius,.375rem); }
   .status p { margin:0 0 .75rem; }
   .retry { padding:.5rem 1rem; border:1px solid var(--calendar-border,#dce1e7); background:var(--calendar-background,#fff); border-radius:var(--calendar-border-radius,.375rem); }
+  .last-updated { margin:.75rem 0 0; padding:0 var(--calendar-padding,1rem); color:var(--calendar-muted,#545e6c); font-size:.875rem; }
   .notice { padding:.75rem 1rem; margin-bottom:1rem; background:var(--calendar-surface,#f4f6f9); font-size:.9375rem; }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   dialog { color:var(--calendar-text,#101729); background:var(--calendar-background,#fff); font:inherit; border:1px solid var(--calendar-border,#dce1e7); border-radius:var(--calendar-dialog-radius,var(--calendar-border-radius,.375rem)); padding:0; width:min(42rem,calc(100vw - 2rem)); max-height:85vh; max-height:85dvh; box-shadow:0 1.5rem 5rem #0004; }
@@ -87,12 +87,12 @@ export class ChurchCalendar extends HTMLElement {
     this.main.addEventListener('click', (event) => this.onClick(event));
     this.main.addEventListener('change', (event) => {
       if (event.target.matches('[data-month-select]')) {
-        if (!this.hasFreshSnapshot()) { this.clearSnapshot(); this.load(); return; }
+        if (!this.hasSnapshot()) { this.clearSnapshot(); this.load(); return; }
         this.selectMonth(event.target.value, 'select');
       }
     });
     this.dialog.addEventListener('click', (event) => {
-      if (!this.hasFreshSnapshot()) {
+      if (!this.hasSnapshot()) {
         event.preventDefault(); this.clearSnapshot(); this.load(); return;
       }
       if (event.target.closest('[data-close]')) this.dialog.close();
@@ -106,10 +106,10 @@ export class ChurchCalendar extends HTMLElement {
       this.lastTrigger?.focus({ preventScroll: true });
     });
     this.onVisibility = () => {
-      if (document.hidden) { this.controller?.abort(); this.clearSnapshot(); clearTimeout(this.retryTimer); }
+      if (document.hidden) { this.controller?.abort(); clearTimeout(this.refreshTimer); clearTimeout(this.retryTimer); }
       else this.load(true);
     };
-    this.onPageHide = () => { this.controller?.abort(); this.clearSnapshot(); clearTimeout(this.retryTimer); };
+    this.onPageHide = () => { this.controller?.abort(); clearTimeout(this.refreshTimer); clearTimeout(this.retryTimer); };
     this.onPageShow = (event) => { if (event.persisted && !document.hidden) this.load(true); };
   }
 
@@ -121,7 +121,7 @@ export class ChurchCalendar extends HTMLElement {
   }
 
   disconnectedCallback() {
-    clearTimeout(this.expiryTimer);
+    clearTimeout(this.refreshTimer);
     clearTimeout(this.retryTimer);
     document.removeEventListener('visibilitychange', this.onVisibility);
     window.removeEventListener('pagehide', this.onPageHide);
@@ -134,13 +134,12 @@ export class ChurchCalendar extends HTMLElement {
     if (this.isConnected) { this.selectedMonth = null; this.clearSnapshot(); this.load(true); }
   }
 
-  hasFreshSnapshot() {
-    return this.snapshot && !deadlinePassed(this.deadline, performance.now(), Date.now());
+  hasSnapshot() {
+    return !!this.snapshot;
   }
 
   clearSnapshot() {
-    clearTimeout(this.expiryTimer);
-    this.deadline = null;
+    clearTimeout(this.refreshTimer);
     this.snapshot = null;
     if (this.dialog.open) this.dialog.close();
     this.showStatus('Loading events…');
@@ -152,8 +151,7 @@ export class ChurchCalendar extends HTMLElement {
     clearTimeout(this.retryTimer);
     this.controller?.abort();
     const controller = new AbortController(); this.controller = controller;
-    if (!this.hasFreshSnapshot()) this.clearSnapshot();
-    const started = performance.now(), wallStarted = Date.now();
+    if (!this.hasSnapshot()) this.clearSnapshot();
     let failureCode;
     try {
       const endpoint = new URL(this.getAttribute('api-url') || DEFAULT_API, document.baseURI);
@@ -164,14 +162,10 @@ export class ChurchCalendar extends HTMLElement {
       this.fallbackUrl = httpsUrl(data.fallbackUrl);
       if (typeof data.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(data.code)) failureCode = data.code;
       if (!response.ok || data.schemaVersion !== 1 || !Array.isArray(data.events)) throw new Error('Events unavailable');
-      const lifetime = displayLifetime(data.freshForMs, Math.max(performance.now() - started, Date.now() - wallStarted));
-      if (lifetime <= 0) throw new Error('Snapshot expired in transit');
-      clearTimeout(this.expiryTimer);
-      this.deadline = { monotonic: performance.now() + lifetime, wall: Date.now() + lifetime };
-      this.expiryTimer = setTimeout(() => {
-        this.clearSnapshot();
-        if (!document.hidden) this.load();
-      }, lifetime);
+      if (!Number.isFinite(Date.parse(data.fetchedAt || data.generatedAt))) throw new Error('Invalid snapshot timestamp');
+      clearTimeout(this.refreshTimer);
+      const refreshAfterMs = Number.isFinite(data.refreshAfterMs) ? Math.max(5000, Math.min(60_000, data.refreshAfterMs)) : 60_000;
+      this.refreshTimer = setTimeout(() => { if (!document.hidden) this.load(); }, refreshAfterMs);
       this.timezone = this.getAttribute('timezone') || data.timezone;
       new Intl.DateTimeFormat('en', { timeZone: this.timezone }).format();
       this.today = keyForDate(new Date(), this.timezone);
@@ -179,7 +173,7 @@ export class ChurchCalendar extends HTMLElement {
       this.maxMonth = keyForDate(new Date(Date.parse(data.window.to) - 1), this.timezone).slice(0, 7);
       this.selectedMonth = this.selectedMonth && this.selectedMonth >= this.minMonth && this.selectedMonth <= this.maxMonth ? this.selectedMonth : this.minMonth;
       // An open dialog is refreshed or closed when its event disappears.
-      const changed = this.snapshot?.generatedAt !== data.generatedAt;
+      const changed = this.snapshot?.generatedAt !== data.generatedAt || this.snapshot?.fetchedAt !== data.fetchedAt;
       this.snapshot = data;
       if (changed || !this.main.querySelector('.layout')) {
         this.render();
@@ -188,11 +182,10 @@ export class ChurchCalendar extends HTMLElement {
           if (current) this.fillDialog(current); else this.dialog.close();
         }
       }
-      if (!this.hasFreshSnapshot()) throw new Error('Snapshot expired while rendering');
     } catch (error) {
       if (controller.signal.aborted || !this.isConnected) return;
-      this.clearSnapshot();
-      this.showStatus(`The calendar is temporarily unavailable. Please try again shortly.${failureCode ? ` (${failureCode})` : ''}`, true);
+      // A failed recheck must not erase a previously displayed good snapshot.
+      if (!this.hasSnapshot()) this.showStatus(`The calendar is temporarily unavailable. Please try again shortly.${failureCode ? ` (${failureCode})` : ''}`, true);
       this.retryTimer = setTimeout(() => { if (!document.hidden) this.load(); }, 30_000);
     } finally {
       if (this.controller === controller) this.loading = false;
@@ -204,7 +197,6 @@ export class ChurchCalendar extends HTMLElement {
     box.append(element('p', '', message));
     if (retry) {
       const button = element('button', 'retry', 'Try again'); button.dataset.retry = ''; box.append(button);
-      if (this.fallbackUrl) box.append(document.createTextNode(' '), externalLink('View calendar on Church Center', this.fallbackUrl));
     }
     this.main.replaceChildren(box);
   }
@@ -227,7 +219,15 @@ export class ChurchCalendar extends HTMLElement {
       const notice = element('div', 'notice', 'Sample calendar — these are demonstration events.');
       notice.setAttribute('role', 'status'); nodes.push(notice);
     }
-    nodes.push(layout); this.main.replaceChildren(...nodes);
+    nodes.push(layout);
+    const updated = element('p', 'last-updated'); updated.setAttribute('part', 'last-updated');
+    const timestamp = this.snapshot.fetchedAt || this.snapshot.generatedAt;
+    const time = element('time', '', new Intl.DateTimeFormat('en-AU', {
+      timeZone: this.timezone, dateStyle: 'medium', timeStyle: 'short',
+    }).format(new Date(timestamp)));
+    time.dateTime = timestamp;
+    updated.append(document.createTextNode('Last updated: '), time);
+    nodes.push(updated); this.main.replaceChildren(...nodes);
     if (this.dialog.open) this.lastTrigger = [...this.main.querySelectorAll('[data-event]')].find((n) => n.dataset.event === this.openId);
     if (focusedAction) [...this.main.querySelectorAll('[data-action]')].find((n) => n.dataset.action === focusedAction)?.focus({ preventScroll: true });
     if (focusedDay) [...this.main.querySelectorAll('[data-day]')].find((n) => n.dataset.day === focusedDay)?.focus({ preventScroll: true });
@@ -321,7 +321,7 @@ export class ChurchCalendar extends HTMLElement {
     const target = event.target.closest('button');
     if (!target || target.disabled) return;
     if (target.hasAttribute('data-retry')) { this.load(); return; }
-    if (!this.hasFreshSnapshot()) { this.clearSnapshot(); this.load(); return; }
+    if (!this.hasSnapshot()) { this.clearSnapshot(); this.load(); return; }
     if (target.dataset.event) {
       const data = this.snapshot.events.find((item) => item.id === target.dataset.event);
       if (data) {
@@ -357,9 +357,8 @@ export class ChurchCalendar extends HTMLElement {
     if (event.location) content.append(element('p', 'location', event.location));
     if (event.description) { const description = element('div', 'description', event.description); description.setAttribute('part', 'description'); content.append(description); }
     const actions = element('div', 'actions');
-    const registration = httpsUrl(event.registrationUrl), details = httpsUrl(event.detailsUrl);
+    const registration = httpsUrl(event.registrationUrl);
     if (registration) { const link = externalLink('Register', registration, 'register'); link.setAttribute('part', 'registration-link'); actions.append(link); }
-    if (details) actions.append(externalLink('View on Church Center', details));
     content.append(actions); nodes.push(content); this.dialog.replaceChildren(...nodes);
     if (focusedClose) close.focus({ preventScroll: true });
   }

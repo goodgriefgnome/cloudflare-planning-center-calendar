@@ -1,7 +1,12 @@
-export const MAX_SNAPSHOT_AGE_MS = 15 * 60 * 1000;
+export const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
-export function remainingFreshness(snapshot, now = Date.now()) {
-  const generated = Date.parse(snapshot?.generatedAt);
-  if (snapshot?.schemaVersion !== 1 || !Number.isFinite(generated) || generated > now) return 0;
-  return Math.max(0, MAX_SNAPSHOT_AGE_MS - (now - generated));
+export function hasSnapshot(snapshot) {
+  return snapshot?.schemaVersion === 1 && Array.isArray(snapshot.events) &&
+    Number.isFinite(Date.parse(snapshot.fetchedAt || snapshot.generatedAt));
+}
+
+export function needsRefresh(snapshot, now = Date.now()) {
+  if (!hasSnapshot(snapshot)) return true;
+  const fetched = Date.parse(snapshot.fetchedAt || snapshot.generatedAt);
+  return fetched > now || now - fetched >= REFRESH_INTERVAL_MS;
 }
