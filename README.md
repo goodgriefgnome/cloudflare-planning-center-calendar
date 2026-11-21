@@ -38,6 +38,8 @@ npm run build
 
 `build` bundles a deployment with Wrangler's dry-run mode; it does not publish anything. Tests cover publication rules, public schedules, cancellations, restricted resources, pagination, auth failures, snapshot replacement, stale-data expiry, CORS, daylight saving, and all-day dates. CI runs these checks on pushes and pull requests.
 
+The suite also runs the Planning Center client inside Cloudflare's local Workers runtime (Miniflare/workerd), with outbound requests intercepted. This checks runtime-specific fetch options and verifies that redirects are rejected without forwarding credentials. It needs no real API credentials or external requests.
+
 Automated checks cover the request-driven refresh and strict 15-minute server/browser expiry, in addition to publication and API behaviour. The Wrangler deployment dry run is also checked. Browser QA is still pending because the development environment's preview relay timed out. Before launch, check desktop and mobile layouts, keyboard/focus behaviour in the details dialog, and a cross-origin embed on the actual website, then compare events against your real Planning Center account.
 
 ## Deploy to your own Cloudflare account

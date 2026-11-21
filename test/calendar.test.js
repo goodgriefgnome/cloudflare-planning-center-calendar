@@ -115,7 +115,7 @@ test('fetches every page, joins included data, sends auth and explicit version',
   assert.equal(result.pages, 2); assert.equal(result.included.size, 2);
   assert.equal(calls[0][1].headers.Authorization, `Basic ${btoa('test-id:test-secret')}`);
   assert.equal(calls[0][1].headers['X-PCO-API-Version'], '2026-06-22');
-  assert.equal(calls[0][1].redirect, 'error');
+  assert.equal(calls[0][1].redirect, 'manual');
   assert.match(instanceUrl(bounds.from, bounds.to), /fields%5BEventInstance%5D/);
 });
 

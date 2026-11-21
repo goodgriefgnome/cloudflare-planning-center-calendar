@@ -55,7 +55,9 @@ export async function fetchInstances(env, from, to, {
     for (let attempt = 0; attempt < 4; attempt++) {
       const remaining = deadline - clock();
       if (remaining <= 0) throw new Error('Sync deadline exceeded');
-      response = await fetcher(url, { headers, redirect: 'error', signal: AbortSignal.timeout(Math.min(15_000, remaining)) });
+      // Workers supports follow/manual, but not redirect:error. Manual mode
+      // leaves all 3xx responses for the !ok check below and never forwards auth.
+      response = await fetcher(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(Math.min(15_000, remaining)) });
       if (response.ok) break;
       if (![429, 500, 502, 503, 504].includes(response.status) || attempt === 3) {
         throw new UpstreamError(response.status);
