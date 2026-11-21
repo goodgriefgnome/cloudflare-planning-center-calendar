@@ -12,7 +12,8 @@ const STYLE = `
   button:focus-visible, a:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline:3px solid var(--calendar-accent,var(--calendar-text,#101729)); outline-offset:4px; }
   a { color:var(--calendar-accent,var(--calendar-text,#101729)); text-underline-offset:.2em; }
   .layout { display:grid; grid-template-columns:17rem minmax(0,1fr); gap:var(--calendar-gap,3rem); align-items:start; background:var(--calendar-background,#fff); padding:var(--calendar-padding,1rem); }
-  .navigation { position:sticky; top:var(--calendar-sticky-offset,1rem); padding:1rem; border:1px solid var(--calendar-border,color-mix(in srgb,var(--calendar-text,#101729) 15%,var(--calendar-background,#fff))); border-radius:var(--calendar-border-radius,.375rem); background:var(--calendar-surface,color-mix(in srgb,var(--calendar-text,#101729) 4%,var(--calendar-background,#fff))); }
+  .navigation-column { position:sticky; top:var(--calendar-sticky-offset,1rem); min-width:0; }
+  .navigation { padding:1rem; border:1px solid var(--calendar-border,color-mix(in srgb,var(--calendar-text,#101729) 15%,var(--calendar-background,#fff))); border-radius:var(--calendar-border-radius,.375rem); background:var(--calendar-surface,color-mix(in srgb,var(--calendar-text,#101729) 4%,var(--calendar-background,#fff))); }
   .navigation button, .navigation select { -webkit-tap-highlight-color:transparent; }
   .navigation button:focus:not(:focus-visible), .navigation select:focus:not(:focus-visible) { outline:none; }
   .month-controls { display:flex; justify-content:space-between; align-items:center; gap:.25rem; margin-bottom:.75rem; }
@@ -37,11 +38,11 @@ const STYLE = `
   .status { padding:1.5rem; background:var(--calendar-surface,color-mix(in srgb,var(--calendar-text,#101729) 4%,var(--calendar-background,#fff))); border-radius:var(--calendar-border-radius,.375rem); }
   .status p { margin:0 0 .75rem; }
   .retry { padding:.5rem 1rem; border:1px solid var(--calendar-border,color-mix(in srgb,var(--calendar-text,#101729) 15%,var(--calendar-background,#fff))); background:var(--calendar-background,#fff); border-radius:var(--calendar-border-radius,.375rem); }
-  .last-updated { margin:.75rem 0 0; padding:0 var(--calendar-padding,1rem); color:var(--calendar-muted,color-mix(in srgb,var(--calendar-text,#101729) 70%,var(--calendar-background,#fff))); font-size:.875rem; }
+  .last-updated { margin:.75rem 0 0; color:var(--calendar-muted,color-mix(in srgb,var(--calendar-text,#101729) 70%,var(--calendar-background,#fff))); font-size:.875rem; }
   .notice { padding:.75rem 1rem; margin-bottom:1rem; background:var(--calendar-surface,color-mix(in srgb,var(--calendar-text,#101729) 4%,var(--calendar-background,#fff))); font-size:.9375rem; }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .description { white-space:pre-wrap; overflow-wrap:anywhere; margin:.5rem 0 0; }
-  @container (max-width: 640px) { .layout { grid-template-columns:minmax(0,1fr); gap:1.75rem; } .navigation { position:static; width:100%; max-width:25rem; margin:0 auto; } }
+  @container (max-width: 640px) { .layout { grid-template-columns:minmax(0,1fr); gap:1.75rem; } .navigation-column { position:static; width:100%; max-width:25rem; margin:0 auto; } }
 `;
 
 function element(tag, className, text) {
@@ -177,7 +178,9 @@ export class ChurchCalendar extends HTMLElement {
     const focusedDay = active?.dataset?.day;
     const focusedSelect = active?.hasAttribute('data-month-select');
     const layout = element('div', 'layout'); layout.setAttribute('part', 'layout');
-    layout.append(this.renderNavigation(), this.renderList());
+    const navigationColumn = element('div', 'navigation-column'); navigationColumn.setAttribute('part', 'navigation-column');
+    navigationColumn.append(this.renderNavigation());
+    layout.append(navigationColumn, this.renderList());
     const nodes = [];
     if (this.snapshot.demo) {
       const notice = element('div', 'notice', 'Sample calendar — these are demonstration events.');
@@ -191,7 +194,7 @@ export class ChurchCalendar extends HTMLElement {
     }).format(new Date(timestamp)));
     time.dateTime = timestamp;
     updated.append(document.createTextNode('Last updated: '), time);
-    nodes.push(updated); this.main.replaceChildren(...nodes);
+    navigationColumn.append(updated); this.main.replaceChildren(...nodes);
     if (focusedAction) [...this.main.querySelectorAll('[data-action]')].find((n) => n.dataset.action === focusedAction)?.focus({ preventScroll: true });
     if (focusedDay) [...this.main.querySelectorAll('[data-day]')].find((n) => n.dataset.day === focusedDay)?.focus({ preventScroll: true });
     if (focusedSelect) this.main.querySelector('select')?.focus({ preventScroll: true });
