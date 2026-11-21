@@ -8,8 +8,8 @@
     "binding": "ASSETS",
     "run_worker_first": true
   },
-  // Replace the ID after running: npx wrangler kv namespace create CALENDAR
-  "kv_namespaces": [{ "binding": "CALENDAR", "id": "00000000000000000000000000000000" }],
+  // Calendar snapshot storage namespace in this Cloudflare account.
+  "kv_namespaces": [{ "binding": "CALENDAR", "id": "e39f81696e3941219e1faf8e821d8be1" }],
   "triggers": { "crons": ["*/15 * * * *"] },
   "vars": {
     "TIMEZONE": "Australia/Sydney",
