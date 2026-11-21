@@ -204,8 +204,8 @@ export class ChurchCalendar extends HTMLElement {
     this.main.replaceChildren(box);
   }
 
-  monthEvents() {
-    return this.snapshot.events.filter((event) => Date.parse(event.end) >= Date.now() && eventDates(event, this.timezone).end >= `${this.selectedMonth}-01`);
+  upcomingEvents() {
+    return this.snapshot.events.filter((event) => Date.parse(event.end) >= Date.now());
   }
 
   render() {
@@ -259,7 +259,7 @@ export class ChurchCalendar extends HTMLElement {
     nav.append(weekdays);
     const days = element('div', 'days');
     const counts = new Map();
-    for (const event of this.monthEvents()) {
+    for (const event of this.upcomingEvents()) {
       const key = eventDates(event, this.timezone).start;
       counts.set(key, (counts.get(key) || 0) + 1);
     }
@@ -281,14 +281,14 @@ export class ChurchCalendar extends HTMLElement {
 
   renderList() {
     const list = element('div', 'list'); list.setAttribute('part', 'list');
-    const events = this.monthEvents();
-    const announcement = element('div', 'sr-only', `${labelDate(`${this.selectedMonth}-01`, { month: 'long', year: 'numeric' })}. ${events.length} upcoming events from this month.`);
+    const events = this.upcomingEvents();
+    const announcement = element('div', 'sr-only', `${events.length} upcoming events from today.`);
     announcement.setAttribute('role', 'status'); list.append(announcement);
     let month, day, monthSection, daySection;
     for (const event of events) {
       const dates = eventDates(event, this.timezone);
-      // An event spanning into this month is included under this month's first date.
-      const groupDay = dates.start < `${this.selectedMonth}-01` ? `${this.selectedMonth}-01` : dates.start;
+      // Ongoing events appear under today, independently of the picker month.
+      const groupDay = dates.start < this.today ? this.today : dates.start;
       if (groupDay.slice(0, 7) !== month) {
         month = groupDay.slice(0, 7); monthSection = element('section', 'month-section'); monthSection.dataset.month = month;
         const heading = element('h2', '', labelDate(`${month}-01`, { month: 'long', year: 'numeric' })); heading.setAttribute('part', 'month-heading');
@@ -331,13 +331,40 @@ export class ChurchCalendar extends HTMLElement {
       }
       daySection.append(row);
     }
-    if (!events.length) list.append(element('h2', '', labelDate(`${this.selectedMonth}-01`, { month: 'long', year: 'numeric' })), element('p', '', 'No upcoming events in this period.'));
+    if (!events.length) list.append(element('p', '', 'No upcoming events in this period.'));
     return list;
+  }
+
+  updateNavigation() {
+    // Keep the event list mounted so picker changes cannot disturb its scroll
+    // position or remove the focused event during a navigation update.
+    const active = this.shadowRoot.activeElement;
+    const navigation = this.main.querySelector('.navigation');
+    navigation.replaceWith(this.renderNavigation());
+    if (active?.hasAttribute('data-month-select')) this.main.querySelector('select')?.focus({ preventScroll: true });
+    if (active?.dataset?.action) [...this.main.querySelectorAll('[data-action]')].find((node) => node.dataset.action === active.dataset.action)?.focus({ preventScroll: true });
+    if (active?.dataset?.day) [...this.main.querySelectorAll('[data-day]')].find((node) => node.dataset.day === active.dataset.day)?.focus({ preventScroll: true });
+  }
+
+  scrollToSection(section) {
+    // scrollIntoView also scrolls the host webpage. Only move a scroll box
+    // inside this component (including the host itself); never an ancestor page.
+    for (let container = section.parentElement; container; container = container.parentElement || (container.getRootNode().host === this ? this : null)) {
+      const style = getComputedStyle(container);
+      if (/(auto|scroll)/.test(style.overflowY) && container.scrollHeight > container.clientHeight) {
+        const margin = parseFloat(getComputedStyle(section).scrollMarginTop) || 0;
+        const top = container.scrollTop + section.getBoundingClientRect().top - container.getBoundingClientRect().top - container.clientTop - margin;
+        container.scrollTo({ top: Math.max(0, top), behavior: 'instant' });
+        break;
+      }
+      if (container === this) break;
+    }
+    section.focus({ preventScroll: true });
   }
 
   selectMonth(key, focusAction) {
     if (key < this.minMonth || key > this.maxMonth) return;
-    this.selectedMonth = key; this.selectedDay = null; this.render();
+    this.selectedMonth = key; this.selectedDay = null; this.updateNavigation();
     if (focusAction === 'select') this.main.querySelector('select')?.focus({ preventScroll: true });
   }
 
@@ -358,9 +385,9 @@ export class ChurchCalendar extends HTMLElement {
     if (target.dataset.action === 'prev') this.selectMonth(monthShift(this.selectedMonth, -1));
     if (target.dataset.action === 'today') this.selectMonth(this.minMonth);
     if (target.dataset.day) {
-      this.selectedDay = target.dataset.day; this.render();
+      this.selectedDay = target.dataset.day; this.updateNavigation();
       const section = [...this.main.querySelectorAll('[data-date]')].find((node) => node.dataset.date >= this.selectedDay);
-      if (section) { section.scrollIntoView({ block: 'start', behavior: 'instant' }); section.focus({ preventScroll: true }); }
+      if (section) this.scrollToSection(section);
     }
   }
 
