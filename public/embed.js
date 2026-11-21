@@ -301,7 +301,10 @@ export class ChurchCalendar extends HTMLElement {
       button.setAttribute('aria-haspopup', 'dialog');
       const time = element('div', 'metadata', timeLabel(event, this.timezone)); time.setAttribute('part', 'event-time');
       row.append(button, time);
-      if (event.recurrence) row.append(element('div', 'metadata recurrence', event.recurrence));
+      // Planning Center appends the series' original start date to recurring
+      // labels. Keep the useful pattern/time, including for cached snapshots.
+      const recurrence = event.recurrence?.replace(/\s+beginning\s+.+$/i, '').trim();
+      if (recurrence) row.append(element('div', 'metadata recurrence', recurrence));
       daySection.append(row);
     }
     if (!events.length) list.append(element('h2', '', labelDate(`${this.selectedMonth}-01`, { month: 'long', year: 'numeric' })), element('p', '', 'No upcoming events in this period.'));
