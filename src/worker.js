@@ -148,7 +148,7 @@ export async function handleFetch(request, env, options = {}) {
     return json({ ...snapshot, refreshing, stale: needsRefresh(snapshot), refreshAfterMs: refreshing ? 10_000 : 60_000, freshForMs: REFRESH_INTERVAL_MS, fallbackUrl: settings.fallbackUrl });
   }
   if (!['GET', 'HEAD'].includes(request.method)) return json({ error: 'Method not allowed' }, 405);
-  if (!['/', '/index.html', '/embed.js', '/dates.js', '/freshness.js'].includes(url.pathname)) return new Response('Not found', { status: 404 });
+  if (!['/', '/index.html', '/embed.js', '/dates.js', '/presentation.js', '/freshness.js'].includes(url.pathname)) return new Response('Not found', { status: 404 });
   const asset = await env.ASSETS.fetch(request);
   const assetHeaders = new Headers(asset.headers);
   assetHeaders.set('X-Content-Type-Options', 'nosniff');

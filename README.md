@@ -2,7 +2,7 @@
 
 A reusable, themeable event-list embed powered by Planning Center Calendar, Cloudflare Workers, and Workers KV. MIT licensed.
 
-The calendar has a month navigator and a continuous list grouped by month and day. Event details open in an accessible native dialog over the host webpage. It uses a web component with Shadow DOM, with CSS custom properties and `::part()` hooks for custom styling. No frontend framework, visitor login, cookies, database, or client-side credentials are required.
+The calendar has a month navigator and a continuous list grouped by month and day. Location and registration appear directly in each event row. Titles with an additional description show an ⓘ indicator and open an accessible native dialog over the host webpage; other titles are ordinary text. It uses a web component with Shadow DOM, with CSS custom properties and `::part()` hooks for custom styling. No frontend framework, visitor login, cookies, database, or client-side credentials are required.
 
 ## Architecture
 
@@ -129,6 +129,8 @@ For a cross-origin local test, add the exact local host origin to `ALLOWED_ORIGI
 
 ## Customisation
 
+The standalone `/` page and the script embed use exactly the same calendar component. The standalone header/footer are outside the component; website fonts, theme overrides, available width and the example's internal scrolling can change its surrounding appearance.
+
 ```html
 <church-calendar
   timezone="Australia/Sydney"
@@ -173,11 +175,19 @@ church-calendar::part(month-heading) { font-family: Georgia, serif; }
 church-calendar::part(dialog) { max-width: 48rem; }
 ```
 
-Available parts: `calendar`, `layout`, `navigation`, `month-select`, `day`, `list`, `month-heading`, `date-heading`, `event`, `event-title`, `event-time`, `dialog`, `dialog-content`, `dialog-title`, `dialog-image`, `description`, `close-button`, `registration-link`, `last-updated`.
+Available parts: `calendar`, `layout`, `navigation`, `month-select`, `day`, `list`, `month-heading`, `date-heading`, `event`, `event-title`, `event-info`, `event-time`, `event-location`, `event-registration`, `dialog`, `dialog-content`, `dialog-title`, `dialog-image`, `description`, `close-button`, `registration-link`, `last-updated`.
 
 The navigation stacks above the list when the **component's container** is narrow, even on a wide desktop. Month changes show that month and all later events in the window. Selecting a day jumps to the next listed event on or after it. The details dialog uses the host webpage's top layer, supports Escape/backdrop/Close, and restores focus. Registration links open in new tabs. Event details contain no Church Center link. An iframe remains possible, but any dialog inside it is confined to the iframe viewport.
 
 The footnote below the calendar shows **Last updated** in the configured calendar timezone. It uses `fetchedAt`, recorded after the complete upstream fetch and normalisation have succeeded; older snapshots fall back to `generatedAt`. It does not advance on a cache read, page load, or failed refresh. Style it with `church-calendar::part(last-updated)`.
+
+### Event presentation
+
+The day heading supplies the date. Single-day all-day events have no time subtitle. Timed events use compact labels such as `at 6pm`, `6–7pm`, `9:30–11am`, or `11am–2pm`. Overnight events say `11pm–12am next day`; longer events use `6pm · until 24 Nov, 10am`, or only `until 24 Nov` for all-day events. Crossing into a new year includes the end year. Details show the full date once, with the same compact times; all-day details show dates only.
+
+Genuine recurrence patterns share the subtitle, for example `10–11am · Every other Tuesday` or `11:30am–2pm · Second Sunday of each month`. The original recurrence start date and duplicate schedule prose/times are omitted. One-off API descriptions such as `Sunday, November 29, 2026 from start of day to end of day` are not treated as recurrence patterns.
+
+A second row shows a location pin and the public location, a direct **Register** link, or both. The title is a button with an ⓘ icon only when its public description adds information. Exact repetitions of the title or already displayed location/schedule do not qualify. An image, location or registration link alone does not create a details panel. Plain titles have no hover underline or click action. Keyboard users can open the indicated details with Enter/Space and close with Escape.
 
 ## Publication and privacy rules
 

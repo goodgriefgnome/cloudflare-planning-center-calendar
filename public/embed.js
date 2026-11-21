@@ -1,4 +1,5 @@
-import { eventDates, keyForDate, labelDate, monthDays, monthShift, timeLabel } from './dates.js';
+import { eventDates, keyForDate, labelDate, monthDays, monthShift } from './dates.js';
+import { additionalDescription, eventDetailsLabel, eventSubtitle } from './presentation.js';
 
 const DEFAULT_API = new URL('/api/events', import.meta.url).href;
 const STYLE = `
@@ -30,11 +31,13 @@ const STYLE = `
   h3 { font-size:.875rem; text-transform:uppercase; letter-spacing:.045em; font-weight:650; color:var(--calendar-muted,#545e6c); margin:0 0 .5rem; }
   .day-section { margin-bottom:1.5rem; scroll-margin-top:var(--calendar-sticky-offset,1rem); }
   .event { padding:.75rem 0; border-bottom:1px solid var(--calendar-border,#dce1e7); }
-  .event-button { display:block; border:0; background:transparent; color:var(--calendar-accent,#285f82); text-align:left; padding:0; min-height:2.75rem; font-size:1.125rem; font-weight:650; line-height:1.45; -webkit-tap-highlight-color:transparent; }
+  .event-title { margin:0; font-size:1.125rem; font-weight:650; line-height:1.45; }
+  .event-button { display:block; border:0; background:transparent; color:var(--calendar-accent,#285f82); text-align:left; padding:0; min-height:2.75rem; -webkit-tap-highlight-color:transparent; }
+  .info-icon { display:inline-block; margin-left:.35em; font-weight:400; font-size:.9em; }
   @media (hover:hover) and (pointer:fine) { .event-button:hover { text-decoration:underline; text-underline-offset:.2em; } }
   [data-dialog-open] .event-button { text-decoration:none; outline:none; }
   .metadata { color:var(--calendar-muted,#545e6c); font-size:.9375rem; }
-  .recurrence { font-size:.875rem; }
+  .event-links { margin-top:.25rem; font-size:.9375rem; color:var(--calendar-muted,#545e6c); }
   .status { padding:1.5rem; background:var(--calendar-surface,#f4f6f9); border-radius:var(--calendar-border-radius,.375rem); }
   .status p { margin:0 0 .75rem; }
   .retry { padding:.5rem 1rem; border:1px solid var(--calendar-border,#dce1e7); background:var(--calendar-background,#fff); border-radius:var(--calendar-border-radius,.375rem); }
@@ -179,7 +182,7 @@ export class ChurchCalendar extends HTMLElement {
         this.render();
         if (this.dialog.open) {
           const current = data.events.find((event) => event.id === this.openId);
-          if (current) this.fillDialog(current); else this.dialog.close();
+          if (current && additionalDescription(current, this.timezone)) this.fillDialog(current); else this.dialog.close();
         }
       }
     } catch (error) {
@@ -297,14 +300,35 @@ export class ChurchCalendar extends HTMLElement {
         daySection.append(heading); monthSection.append(daySection);
       }
       const row = element('article', 'event'); row.setAttribute('part', 'event');
-      const button = element('button', 'event-button', event.title); button.dataset.event = event.id; button.setAttribute('part', 'event-title');
-      button.setAttribute('aria-haspopup', 'dialog');
-      const time = element('div', 'metadata', timeLabel(event, this.timezone)); time.setAttribute('part', 'event-time');
-      row.append(button, time);
-      // Planning Center appends the series' original start date to recurring
-      // labels. Keep the useful pattern/time, including for cached snapshots.
-      const recurrence = event.recurrence?.replace(/\s+beginning\s+.+$/i, '').trim();
-      if (recurrence) row.append(element('div', 'metadata recurrence', recurrence));
+      const hasDetails = !!additionalDescription(event, this.timezone);
+      const title = element(hasDetails ? 'button' : 'div', hasDetails ? 'event-title event-button' : 'event-title', event.title);
+      title.setAttribute('part', 'event-title');
+      if (hasDetails) {
+        title.dataset.event = event.id;
+        title.setAttribute('aria-haspopup', 'dialog');
+        title.setAttribute('aria-label', `More information about ${event.title}`);
+        const icon = element('span', 'info-icon', 'ⓘ'); icon.setAttribute('aria-hidden', 'true'); icon.setAttribute('part', 'event-info');
+        title.append(icon);
+      }
+      row.append(title);
+      const subtitle = eventSubtitle(event, this.timezone);
+      if (subtitle) { const time = element('div', 'metadata', subtitle); time.setAttribute('part', 'event-time'); row.append(time); }
+      const registrationUrl = httpsUrl(event.registrationUrl);
+      if (event.location || registrationUrl) {
+        const links = element('div', 'event-links');
+        if (event.location) {
+          const location = element('span'); location.setAttribute('part', 'event-location');
+          const pin = element('span', '', '📍 '); pin.setAttribute('aria-hidden', 'true');
+          location.append(pin, element('span', 'sr-only', 'Location: '), document.createTextNode(event.location));
+          links.append(location);
+        }
+        if (event.location && registrationUrl) links.append(document.createTextNode(' · '));
+        if (registrationUrl) {
+          const link = externalLink('Register', registrationUrl); link.setAttribute('part', 'event-registration');
+          link.setAttribute('aria-label', `Register for ${event.title} (opens in a new tab)`); links.append(link);
+        }
+        row.append(links);
+      }
       daySection.append(row);
     }
     if (!events.length) list.append(element('h2', '', labelDate(`${this.selectedMonth}-01`, { month: 'long', year: 'numeric' })), element('p', '', 'No upcoming events in this period.'));
@@ -324,7 +348,7 @@ export class ChurchCalendar extends HTMLElement {
     if (!this.hasSnapshot()) { this.clearSnapshot(); this.load(); return; }
     if (target.dataset.event) {
       const data = this.snapshot.events.find((item) => item.id === target.dataset.event);
-      if (data) {
+      if (data && additionalDescription(data, this.timezone)) {
         this.lastTrigger = target; this.openId = data.id; this.fillDialog(data);
         this.main.setAttribute('data-dialog-open', '');
         this.dialog.showModal();
@@ -352,10 +376,10 @@ export class ChurchCalendar extends HTMLElement {
     const title = element('h2', '', event.title); title.id = 'event-title'; title.setAttribute('part', 'dialog-title');
     const close = element('button', 'close', 'Close'); close.dataset.close = ''; close.autofocus = true; close.setAttribute('part', 'close-button');
     top.append(title, close); content.append(top);
-    const { start } = eventDates(event, this.timezone);
-    content.append(element('p', '', `${labelDate(start, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${timeLabel(event, this.timezone)}`));
+    content.append(element('p', '', eventDetailsLabel(event, this.timezone)));
     if (event.location) content.append(element('p', 'location', event.location));
-    if (event.description) { const description = element('div', 'description', event.description); description.setAttribute('part', 'description'); content.append(description); }
+    const extra = additionalDescription(event, this.timezone);
+    if (extra) { const description = element('div', 'description', extra); description.setAttribute('part', 'description'); content.append(description); }
     const actions = element('div', 'actions');
     const registration = httpsUrl(event.registrationUrl);
     if (registration) { const link = externalLink('Register', registration, 'register'); link.setAttribute('part', 'registration-link'); actions.append(link); }
