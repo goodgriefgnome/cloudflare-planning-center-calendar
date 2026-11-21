@@ -31,8 +31,9 @@ const STYLE = `
   h3 { font-size:.875rem; text-transform:uppercase; letter-spacing:.045em; font-weight:650; color:var(--calendar-muted,#545e6c); margin:0 0 .5rem; }
   .day-section { margin-bottom:1.5rem; scroll-margin-top:var(--calendar-sticky-offset,1rem); }
   .event { padding:.75rem 0; border-bottom:1px solid var(--calendar-border,#dce1e7); }
-  .event-button { display:block; border:0; background:transparent; color:var(--calendar-accent,#285f82); text-align:left; padding:0; min-height:2.75rem; font-size:1.125rem; font-weight:650; line-height:1.45; }
-  .event-button:hover { text-decoration:underline; text-underline-offset:.2em; }
+  .event-button { display:block; border:0; background:transparent; color:var(--calendar-accent,#285f82); text-align:left; padding:0; min-height:2.75rem; font-size:1.125rem; font-weight:650; line-height:1.45; -webkit-tap-highlight-color:transparent; }
+  @media (hover:hover) and (pointer:fine) { .event-button:hover { text-decoration:underline; text-underline-offset:.2em; } }
+  [data-dialog-open] .event-button { text-decoration:none; outline:none; }
   .metadata { color:var(--calendar-muted,#545e6c); font-size:.9375rem; }
   .recurrence { font-size:.875rem; }
   .status { padding:1.5rem; background:var(--calendar-surface,#f4f6f9); border-radius:var(--calendar-border-radius,.375rem); }
@@ -53,7 +54,6 @@ const STYLE = `
   .location { white-space:pre-wrap; }
   @container (max-width: 640px) { .layout { grid-template-columns:minmax(0,1fr); gap:1.75rem; } .navigation { position:static; width:100%; max-width:25rem; margin:0 auto; } }
   @media (max-width: 480px) { dialog { width:calc(100vw - 1rem); max-height:94dvh; } .dialog-content { padding:1.25rem; } }
-  @media (prefers-reduced-motion:no-preference) { .event-button { transition:color .15s; } }
 `;
 
 function element(tag, className, text) {
@@ -101,7 +101,10 @@ export class ChurchCalendar extends HTMLElement {
         if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) this.dialog.close();
       }
     });
-    this.dialog.addEventListener('close', () => this.lastTrigger?.focus({ preventScroll: true }));
+    this.dialog.addEventListener('close', () => {
+      this.main.removeAttribute('data-dialog-open');
+      this.lastTrigger?.focus({ preventScroll: true });
+    });
     this.onVisibility = () => {
       if (document.hidden) { this.controller?.abort(); this.clearSnapshot(); clearTimeout(this.retryTimer); }
       else this.load(true);
@@ -318,7 +321,11 @@ export class ChurchCalendar extends HTMLElement {
     if (!this.hasFreshSnapshot()) { this.clearSnapshot(); this.load(); return; }
     if (target.dataset.event) {
       const data = this.snapshot.events.find((item) => item.id === target.dataset.event);
-      if (data) { this.lastTrigger = target; this.openId = data.id; this.fillDialog(data); this.dialog.showModal(); }
+      if (data) {
+        this.lastTrigger = target; this.openId = data.id; this.fillDialog(data);
+        this.main.setAttribute('data-dialog-open', '');
+        this.dialog.showModal();
+      }
     }
     if (target.dataset.action === 'next') this.selectMonth(monthShift(this.selectedMonth, 1));
     if (target.dataset.action === 'prev') this.selectMonth(monthShift(this.selectedMonth, -1));
@@ -344,7 +351,6 @@ export class ChurchCalendar extends HTMLElement {
     top.append(title, close); content.append(top);
     const { start } = eventDates(event, this.timezone);
     content.append(element('p', '', `${labelDate(start, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${timeLabel(event, this.timezone)}`));
-    if (!event.allDay) content.append(element('p', 'metadata', `Times shown in ${this.timezone.replaceAll('_', ' ')}`));
     if (event.location) content.append(element('p', 'location', event.location));
     if (event.description) { const description = element('div', 'description', event.description); description.setAttribute('part', 'description'); content.append(description); }
     const actions = element('div', 'actions');
