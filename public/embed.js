@@ -8,8 +8,8 @@ const STYLE = `
   button, select { font:inherit; color:inherit; }
   button { cursor:pointer; }
   button:disabled { cursor:default; opacity:.35; }
-  button:focus-visible, a:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline:3px solid var(--calendar-accent,#285f82); outline-offset:4px; }
-  a { color:var(--calendar-accent,#285f82); text-underline-offset:.2em; }
+  button:focus-visible, a:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline:3px solid var(--calendar-accent,var(--calendar-text,#101729)); outline-offset:4px; }
+  a { color:var(--calendar-accent,var(--calendar-text,#101729)); text-underline-offset:.2em; }
   .layout { display:grid; grid-template-columns:17rem minmax(0,1fr); gap:var(--calendar-gap,3rem); align-items:start; background:var(--calendar-background,#fff); padding:var(--calendar-padding,1rem); }
   .navigation { position:sticky; top:var(--calendar-sticky-offset,1rem); padding:1rem; border:1px solid var(--calendar-border,color-mix(in srgb,var(--calendar-text,#101729) 15%,var(--calendar-background,#fff))); border-radius:var(--calendar-border-radius,.375rem); background:var(--calendar-surface,color-mix(in srgb,var(--calendar-text,#101729) 4%,var(--calendar-background,#fff))); }
   .navigation button, .navigation select { -webkit-tap-highlight-color:transparent; }

@@ -137,7 +137,6 @@ The standalone `/` page and the script embed use exactly the same calendar compo
   style="
     --calendar-font-family: inherit;
     --calendar-text: #101729;
-    --calendar-accent: #285f82;
     --calendar-background: #ffffff;
     --calendar-border-radius: 6px;
   "
@@ -152,7 +151,7 @@ The `timezone` attribute overrides timed-event display, defaulting to the snapsh
 | `--calendar-font-size` | `1rem` |
 | `--calendar-text` | `#101729` |
 | `--calendar-muted` | 70% text / 30% background |
-| `--calendar-accent` | `#285f82` (dark enough for normal text on white) |
+| `--calendar-accent` | Follows `--calendar-text`; override for a separate link/focus colour |
 | `--calendar-background` | `#fff` |
 | `--calendar-surface` | 4% text / 96% background |
 | `--calendar-border` | 15% text / 85% background |
