@@ -42,7 +42,13 @@ const STYLE = `
   .notice { padding:.75rem 1rem; margin-bottom:1rem; background:var(--calendar-surface,color-mix(in srgb,var(--calendar-text,#101729) 4%,var(--calendar-background,#fff))); font-size:.9375rem; }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .description { white-space:pre-wrap; overflow-wrap:anywhere; margin:.5rem 0 0; }
-  @container (max-width: 640px) { .layout { grid-template-columns:minmax(0,1fr); gap:1.75rem; } .navigation-column { position:static; width:100%; max-width:25rem; margin:0 auto; } }
+  @container (max-width: 640px) {
+    .layout { grid-template-columns:minmax(0,1fr); gap:.75rem; }
+    .navigation { display:none; }
+    .list { grid-row:1; }
+    .navigation-column { position:static; grid-row:2; }
+    .last-updated { margin:0; }
+  }
 `;
 
 function element(tag, className, text) {
