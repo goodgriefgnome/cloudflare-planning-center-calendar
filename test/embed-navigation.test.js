@@ -91,6 +91,7 @@ test('date button keeps the list mounted and jumps to the next available day', (
   const button = { dataset: { day: '2026-12-01' }, hasAttribute: () => false };
   view.onClick({ target: { closest: () => button } });
   assert.equal(updates, 1); assert.equal(destination, sections[1]);
+  assert.equal(view.selectedMonth, '2026-12');
 });
 
 function rows(view) {
@@ -171,4 +172,26 @@ test('picker enables adjacent-month future dates and disables only past dates', 
   assert.ok(current.filter((node) => node.dataset.day >= view.today).every((node) => !node.disabled));
   const today = current.find((node) => node.dataset.day === view.today);
   assert.equal(today.className, 'today'); assert.equal(today.attributes['aria-current'], 'date');
+});
+
+
+test('clicking spillover dates switches month forwards, backwards and across year boundaries', () => {
+  const view = component();
+  view.main = { querySelectorAll: () => [] };
+  view.updateNavigation = () => {};
+  for (const [previous, date, expected] of [
+    ['2026-12', '2026-11-29', '2026-11'],
+    ['2026-12', '2027-01-01', '2027-01'],
+    ['2027-11', '2027-12-01', '2027-12'],
+  ]) {
+    view.selectedMonth = previous;
+    const button = { dataset: { day: date }, hasAttribute: () => false };
+    view.onClick({ target: { closest: () => button } });
+    assert.equal(view.selectedMonth, expected);
+    const nav = view.renderNavigation();
+    const select = nav.children[0].children.find((node) => node.attributes['aria-label'] === 'Choose month');
+    assert.equal(select.children.find((node) => node.selected).value, expected);
+  }
+  view.selectMonth('2027-11');
+  assert.equal(view.selectedMonth, '2027-11');
 });

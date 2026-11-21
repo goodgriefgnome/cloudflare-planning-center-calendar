@@ -169,7 +169,7 @@ Muted, surface and border defaults use `color-mix(in srgb, …)` with `--calenda
 --calendar-border: #cccccc;
 ```
 
-The picker has no hover background, selected-date fill or today outline. Today remains bold, event dots remain, and keyboard focus is visible. Its date buttons jump to the list rather than representing a selection that tracks scrolling. All displayed dates on or after today are clickable, including dates from adjacent months. Adjacent-month dates have the same faded appearance as disabled dates, while future dates retain their click action and keyboard access. Dates beyond the fetched window may have no corresponding event to jump to. `--calendar-hover` and `--calendar-on-accent` are no longer used.
+The picker has no hover background, selected-date fill or today outline. Today remains bold, event dots remain, and keyboard focus is visible. Its date buttons jump to the list rather than representing a selection that tracks scrolling. All displayed dates on or after today are clickable, including dates from adjacent months. Clicking an adjacent-month date switches the picker to that month as well as jumping to the next listed event. Adjacent-month dates have the same faded appearance as disabled dates, while future dates retain their click action and keyboard access. Dates beyond the fetched window may have no corresponding event to jump to. `--calendar-hover` and `--calendar-on-accent` are no longer used.
 
 For more control:
 

@@ -60,3 +60,13 @@ test('a cold failure still shows the unavailable state', async (t) => {
   const view = component(); await view.load();
   assert.equal(view.snapshot, null); assert.match(view.status, /temporarily unavailable/);
 });
+
+
+test('a background reload preserves the month chosen through a spillover date', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(globalThis, 'fetch', async () => response());
+  const view = component(); view.selectedMonth = '2027-12';
+  await view.load();
+  assert.equal(view.maxMonth, '2027-11');
+  assert.equal(view.selectedMonth, '2027-12');
+});

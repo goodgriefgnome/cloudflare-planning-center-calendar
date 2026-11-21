@@ -148,7 +148,7 @@ export class ChurchCalendar extends HTMLElement {
       this.today = keyForDate(new Date(), this.timezone);
       this.minMonth = this.today.slice(0, 7);
       this.maxMonth = keyForDate(new Date(Date.parse(data.window.to) - 1), this.timezone).slice(0, 7);
-      this.selectedMonth = this.selectedMonth && this.selectedMonth >= this.minMonth && this.selectedMonth <= this.maxMonth ? this.selectedMonth : this.minMonth;
+      this.selectedMonth = this.selectedMonth && this.selectedMonth >= this.minMonth ? this.selectedMonth : this.minMonth;
       const changed = this.snapshot?.generatedAt !== data.generatedAt || this.snapshot?.fetchedAt !== data.fetchedAt;
       this.snapshot = data;
       if (changed || !this.main.querySelector('.layout')) {
@@ -217,7 +217,9 @@ export class ChurchCalendar extends HTMLElement {
       controls.append(button);
     }
     const select = element('select'); select.dataset.monthSelect = ''; select.setAttribute('aria-label', 'Choose month'); select.setAttribute('part', 'month-select');
-    for (let key = this.minMonth; key <= this.maxMonth; key = monthShift(key, 1)) {
+    // A clickable spillover date can belong to the month beyond the data window.
+    const lastMonth = this.selectedMonth > this.maxMonth ? this.selectedMonth : this.maxMonth;
+    for (let key = this.minMonth; key <= lastMonth; key = monthShift(key, 1)) {
       const option = element('option', '', labelDate(`${key}-01`, { month: 'long', year: 'numeric' }));
       option.value = key; option.selected = key === this.selectedMonth; select.append(option);
     }
@@ -332,7 +334,7 @@ export class ChurchCalendar extends HTMLElement {
   }
 
   selectMonth(key, focusAction) {
-    if (key < this.minMonth || key > this.maxMonth) return;
+    if (key < this.minMonth || (key > this.maxMonth && key > this.selectedMonth)) return;
     this.selectedMonth = key; this.selectedDay = null; this.updateNavigation();
     if (focusAction === 'select') this.main.querySelector('select')?.focus({ preventScroll: true });
   }
@@ -346,7 +348,9 @@ export class ChurchCalendar extends HTMLElement {
     if (target.dataset.action === 'prev') this.selectMonth(monthShift(this.selectedMonth, -1));
     if (target.dataset.action === 'today') this.selectMonth(this.minMonth);
     if (target.dataset.day) {
-      this.selectedDay = target.dataset.day; this.updateNavigation();
+      this.selectedDay = target.dataset.day;
+      this.selectedMonth = this.selectedDay.slice(0, 7);
+      this.updateNavigation();
       const section = [...this.main.querySelectorAll('[data-date]')].find((node) => node.dataset.date >= this.selectedDay);
       if (section) this.scrollToSection(section);
     }
